@@ -13,6 +13,8 @@ interface ForecastConfig {
   performance_ratio: number;
   controller_efficiency: number;
   controller_max_output_watts: number | null;
+  battery_capacity_kwh: number;
+  assumed_daily_usage_kwh: number;
   current_soc_at_0600_percent: number | null;
   strategy: Strategy;
   off_peak_cost_p_per_kwh: number;
@@ -129,6 +131,8 @@ export class ForecastService {
     performance_ratio: 0.85,
     controller_efficiency: 0.98,
     controller_max_output_watts: null,
+    battery_capacity_kwh: 16.0,
+    assumed_daily_usage_kwh: 14.0,
     current_soc_at_0600_percent: null,
     strategy: 'zero-cost',
     off_peak_cost_p_per_kwh: 0.0,
@@ -179,6 +183,8 @@ export class ForecastService {
         rawConfig.controller_max_output_watts,
         this.defaultConfig.controller_max_output_watts,
       ),
+      battery_capacity_kwh: this.toNumberOrDefault(rawConfig.battery_capacity_kwh, this.defaultConfig.battery_capacity_kwh),
+      assumed_daily_usage_kwh: this.toNumberOrDefault(rawConfig.assumed_daily_usage_kwh, this.defaultConfig.assumed_daily_usage_kwh),
       current_soc_at_0600_percent: this.toOptionalNumber(
         rawConfig.current_soc_at_0600_percent,
         this.defaultConfig.current_soc_at_0600_percent,
@@ -266,10 +272,10 @@ export class ForecastService {
     return { endSocWh: socWh, minSocWh };
   }
 
-  private recommendGridTarget(day: DayForecast): BatteryPlanRow {
-    const capacityWh = this.battery.capacity_kwh * 1000.0;
+  private recommendGridTarget(day: DayForecast, batteryCapacityKwh: number, assumedDailyUsageKwh: number): BatteryPlanRow {
+    const capacityWh = batteryCapacityKwh * 1000.0;
     const reserveWh = capacityWh * (this.battery.reserve_percent_floor / 100.0);
-    const loadWhPerHour = (this.battery.assumed_daily_usage_kwh * 1000.0) / 24.0;
+    const loadWhPerHour = (assumedDailyUsageKwh * 1000.0) / 24.0;
     const planningHours = day.times
       .map((timeLabel, idx) => ({ hour: this.hourFromTimeLabel(timeLabel), solarWh: day.controller_output_power_w[idx] }))
       .filter((item) => item.hour >= this.battery.planning_window_start_hour && item.hour < this.battery.planning_window_end_hour)
@@ -306,7 +312,7 @@ export class ForecastService {
       grid_charge_0000_0600_recommendation: 'Depends on current SoC',
       projected_end_of_day_soc_percent: 0,
       daily_net_pence: 0,
-      assumed_daily_usage_kwh: this.battery.assumed_daily_usage_kwh,
+      assumed_daily_usage_kwh: assumedDailyUsageKwh,
       reserve_floor_violated_even_at_full_charge: reserveFloorViolated,
     };
   }
@@ -425,11 +431,13 @@ export class ForecastService {
     const summaryLabels: string[] = [];
     const summaryValuesKwh: number[] = [];
     const batteryPlan: BatteryPlanRow[] = [];
-    const capacityWh = this.battery.capacity_kwh * 1000.0;
+    const batteryCapacityKwh = Math.max(0.1, config.battery_capacity_kwh);
+    const assumedDailyUsageKwh = Math.max(0.0, config.assumed_daily_usage_kwh);
+    const capacityWh = batteryCapacityKwh * 1000.0;
     const reserveWh = capacityWh * (this.battery.reserve_percent_floor / 100.0);
     const overnightDrainKwh = this.battery.night_load_kwh_per_hour * this.battery.night_hours_to_target;
     const overnightDrainWh = overnightDrainKwh * 1000.0;
-    const daytimeLoadTotalWh = Math.max(0.0, (this.battery.assumed_daily_usage_kwh - overnightDrainKwh) * 1000.0);
+    const daytimeLoadTotalWh = Math.max(0.0, (assumedDailyUsageKwh - overnightDrainKwh) * 1000.0);
 
     const sortedDayKeys = Object.keys(daily).sort();
     for (const dayKey of sortedDayKeys) {
@@ -448,7 +456,7 @@ export class ForecastService {
       days.push(item);
       summaryLabels.push(dayKey);
       summaryValuesKwh.push(Number((item.controller_output_power_w_total / 1000.0).toFixed(3)));
-      batteryPlan.push(this.recommendGridTarget(item));
+      batteryPlan.push(this.recommendGridTarget(item, batteryCapacityKwh, assumedDailyUsageKwh));
     }
 
     const currentDayStartSocWh = config.current_soc_at_0600_percent === null
@@ -469,8 +477,8 @@ export class ForecastService {
       if (config.strategy === 'sell-all' || config.strategy === 'balanced') {
         targetSocWh = capacityWh;
         row.recommended_target_percent_before_6am = 100.0;
-        row.recommended_target_energy_kwh = Number(this.battery.capacity_kwh.toFixed(3));
-        row.grid_charge_from_reserve_floor_kwh = Number(Math.max(0.0, this.battery.capacity_kwh - (reserveWh / 1000.0)).toFixed(3));
+        row.recommended_target_energy_kwh = Number(batteryCapacityKwh.toFixed(3));
+        row.grid_charge_from_reserve_floor_kwh = Number(Math.max(0.0, batteryCapacityKwh - (reserveWh / 1000.0)).toFixed(3));
       } else {
         targetSocWh = row.recommended_target_energy_kwh * 1000.0;
       }
@@ -559,9 +567,9 @@ export class ForecastService {
       },
       battery_plan: batteryPlan,
       battery_assumptions: {
-        capacity_kwh: this.battery.capacity_kwh,
+        capacity_kwh: batteryCapacityKwh,
         reserve_percent_floor: this.battery.reserve_percent_floor,
-        assumed_daily_usage_kwh: this.battery.assumed_daily_usage_kwh,
+        assumed_daily_usage_kwh: assumedDailyUsageKwh,
         night_load_kwh_per_hour: this.battery.night_load_kwh_per_hour,
         night_hours_to_target: this.battery.night_hours_to_target,
         soc_rounding_step_percent: this.battery.soc_rounding_step_percent,
