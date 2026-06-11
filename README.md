@@ -2,6 +2,8 @@
 
 Solar Forecast is an Angular dashboard that estimates PV generation from Open-Meteo forecast data and produces a battery/grid charging plan.
 
+Go here for a demo: https://www.darrenhorrocks.co.uk/solar-forecast/
+
 ## What it does
 
 1. Pulls hourly weather and irradiance forecast data for your location (up to 16 days).
@@ -18,6 +20,12 @@ Solar Forecast is an Angular dashboard that estimates PV generation from Open-Me
    - `sell-all`
    - `balanced`
    - `zero-cost`
+
+## Strategy behavior
+
+- `sell-all`: Targets 100% battery charge before 06:00 and exports all solar generation during the day. House load is supplied from battery down to the reserve floor, then imports from grid.
+- `balanced`: Targets 100% battery charge before 06:00. During the day, battery is used for house load first (down to reserve floor), then solar is used to recharge battery, and only surplus solar is exported.
+- `zero-cost`: Uses forecasted solar to calculate the minimum pre-06:00 charge target that should avoid reserve-floor breaches. During the day, solar serves house load first, then battery covers remaining load (down to reserve floor), then surplus solar charges battery, and only remaining surplus is exported.
 
 ## Inputs you can configure
 
