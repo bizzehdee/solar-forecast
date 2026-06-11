@@ -33,6 +33,7 @@ Go here for a demo: https://www.darrenhorrocks.co.uk/solar-forecast/
 - System values (`installed_watts`, `performance_ratio`, `controller_efficiency`, optional controller max output)
 - Battery state at 06:00 (`current_soc_at_0600_percent`)
 - Tariff values (off-peak, on-peak, sell-back)
+- Off-peak window (`off_peak_window_start`, `off_peak_window_end`)
 - Dispatch strategy (`sell-all`, `balanced`, `zero-cost`)
 
 ## Run locally

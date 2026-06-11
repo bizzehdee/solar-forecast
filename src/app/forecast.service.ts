@@ -18,6 +18,8 @@ interface ForecastConfig {
   current_soc_at_0600_percent: number | null;
   strategy: Strategy;
   off_peak_cost_p_per_kwh: number;
+  off_peak_window_start: string;
+  off_peak_window_end: string;
   on_peak_cost_p_per_kwh: number;
   sell_back_price_p_per_kwh: number;
   timezone: string;
@@ -95,6 +97,8 @@ interface BatteryAssumptions {
   current_soc_at_0600_percent: number | null;
   strategy: Strategy;
   off_peak_cost_p_per_kwh: number;
+  off_peak_window: string;
+  off_peak_end_label: string;
   on_peak_cost_p_per_kwh: number;
   sell_back_price_p_per_kwh: number;
   planning_window: string;
@@ -136,6 +140,8 @@ export class ForecastService {
     current_soc_at_0600_percent: null,
     strategy: 'zero-cost',
     off_peak_cost_p_per_kwh: 0.0,
+    off_peak_window_start: '00:00',
+    off_peak_window_end: '06:00',
     on_peak_cost_p_per_kwh: 0.0,
     sell_back_price_p_per_kwh: 0.0,
     timezone: 'auto',
@@ -191,6 +197,8 @@ export class ForecastService {
       ),
       strategy,
       off_peak_cost_p_per_kwh: this.toNumberOrDefault(rawConfig.off_peak_cost_p_per_kwh, this.defaultConfig.off_peak_cost_p_per_kwh),
+      off_peak_window_start: this.normalizeTimeValue(rawConfig.off_peak_window_start, this.defaultConfig.off_peak_window_start),
+      off_peak_window_end: this.normalizeTimeValue(rawConfig.off_peak_window_end, this.defaultConfig.off_peak_window_end),
       on_peak_cost_p_per_kwh: this.toNumberOrDefault(rawConfig.on_peak_cost_p_per_kwh, this.defaultConfig.on_peak_cost_p_per_kwh),
       sell_back_price_p_per_kwh: this.toNumberOrDefault(rawConfig.sell_back_price_p_per_kwh, this.defaultConfig.sell_back_price_p_per_kwh),
       timezone: String(rawConfig.timezone ?? this.defaultConfig.timezone),
@@ -216,6 +224,28 @@ export class ForecastService {
     }
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : fallback;
+  }
+
+  private normalizeTimeValue(value: unknown, fallback: string): string {
+    const text = String(value ?? '').trim();
+    if (/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(text)) {
+      return text;
+    }
+    return fallback;
+  }
+
+  private timeToHour(value: string): number {
+    const [hourText, minuteText] = value.split(':', 2);
+    const hours = Number.parseInt(hourText, 10);
+    const minutes = Number.parseInt(minuteText, 10);
+    return hours + (minutes / 60);
+  }
+
+  private durationHours(startTime: string, endTime: string): number {
+    const startHour = this.timeToHour(startTime);
+    const endHour = this.timeToHour(endTime);
+    const raw = endHour - startHour;
+    return raw > 0 ? raw : raw + 24;
   }
 
   private async fetchOpenMeteo(config: ForecastConfig): Promise<OpenMeteoResponse> {
@@ -272,13 +302,19 @@ export class ForecastService {
     return { endSocWh: socWh, minSocWh };
   }
 
-  private recommendGridTarget(day: DayForecast, batteryCapacityKwh: number, assumedDailyUsageKwh: number): BatteryPlanRow {
+  private recommendGridTarget(
+    day: DayForecast,
+    batteryCapacityKwh: number,
+    assumedDailyUsageKwh: number,
+    planningWindowStartHour: number,
+    planningWindowEndHour: number,
+  ): BatteryPlanRow {
     const capacityWh = batteryCapacityKwh * 1000.0;
     const reserveWh = capacityWh * (this.battery.reserve_percent_floor / 100.0);
     const loadWhPerHour = (assumedDailyUsageKwh * 1000.0) / 24.0;
     const planningHours = day.times
       .map((timeLabel, idx) => ({ hour: this.hourFromTimeLabel(timeLabel), solarWh: day.controller_output_power_w[idx] }))
-      .filter((item) => item.hour >= this.battery.planning_window_start_hour && item.hour < this.battery.planning_window_end_hour)
+      .filter((item) => item.hour >= planningWindowStartHour && item.hour < planningWindowEndHour)
       .map((item) => item.solarWh);
 
     let targetSocWh: number | null = null;
@@ -434,9 +470,14 @@ export class ForecastService {
     const batteryCapacityKwh = Math.max(0.0, config.battery_capacity_kwh);
     const hasBattery = batteryCapacityKwh > 0;
     const assumedDailyUsageKwh = Math.max(0.0, config.assumed_daily_usage_kwh);
+    const offPeakWindowStart = config.off_peak_window_start;
+    const offPeakWindowEnd = config.off_peak_window_end;
+    const planningWindowStartHour = this.timeToHour(offPeakWindowEnd);
+    const planningWindowEndHour = 24.0;
+    const offPeakWindowDurationHours = this.durationHours(offPeakWindowStart, offPeakWindowEnd);
     const capacityWh = batteryCapacityKwh * 1000.0;
     const reserveWh = capacityWh * (this.battery.reserve_percent_floor / 100.0);
-    const overnightDrainKwh = this.battery.night_load_kwh_per_hour * this.battery.night_hours_to_target;
+    const overnightDrainKwh = this.battery.night_load_kwh_per_hour * offPeakWindowDurationHours;
     const overnightDrainWh = overnightDrainKwh * 1000.0;
     const daytimeLoadTotalWh = Math.max(0.0, (assumedDailyUsageKwh - overnightDrainKwh) * 1000.0);
 
@@ -458,7 +499,15 @@ export class ForecastService {
       summaryLabels.push(dayKey);
       summaryValuesKwh.push(Number((item.controller_output_power_w_total / 1000.0).toFixed(3)));
       if (hasBattery) {
-        batteryPlan.push(this.recommendGridTarget(item, batteryCapacityKwh, assumedDailyUsageKwh));
+        batteryPlan.push(
+          this.recommendGridTarget(
+            item,
+            batteryCapacityKwh,
+            assumedDailyUsageKwh,
+            planningWindowStartHour,
+            planningWindowEndHour,
+          ),
+        );
       }
     }
 
@@ -472,7 +521,7 @@ export class ForecastService {
       const dayEntry = days[index];
       const planningHours = dayEntry.times
         .map((timeLabel, i) => ({ hour: this.hourFromTimeLabel(timeLabel), solarWh: dayEntry.controller_output_power_w[i] }))
-        .filter((item) => item.hour >= this.battery.planning_window_start_hour && item.hour < this.battery.planning_window_end_hour)
+        .filter((item) => item.hour >= planningWindowStartHour && item.hour < planningWindowEndHour)
         .map((item) => item.solarWh);
       const loadWhPerHour = planningHours.length ? daytimeLoadTotalWh / planningHours.length : 0.0;
 
@@ -574,14 +623,16 @@ export class ForecastService {
         reserve_percent_floor: this.battery.reserve_percent_floor,
         assumed_daily_usage_kwh: assumedDailyUsageKwh,
         night_load_kwh_per_hour: this.battery.night_load_kwh_per_hour,
-        night_hours_to_target: this.battery.night_hours_to_target,
+        night_hours_to_target: offPeakWindowDurationHours,
         soc_rounding_step_percent: this.battery.soc_rounding_step_percent,
         current_soc_at_0600_percent: hasBattery ? config.current_soc_at_0600_percent : null,
         strategy: config.strategy,
         off_peak_cost_p_per_kwh: config.off_peak_cost_p_per_kwh,
+        off_peak_window: `${offPeakWindowStart}-${offPeakWindowEnd}`,
+        off_peak_end_label: offPeakWindowEnd,
         on_peak_cost_p_per_kwh: config.on_peak_cost_p_per_kwh,
         sell_back_price_p_per_kwh: config.sell_back_price_p_per_kwh,
-        planning_window: `${String(this.battery.planning_window_start_hour).padStart(2, '0')}:00-${String(this.battery.planning_window_end_hour).padStart(2, '0')}:00`,
+        planning_window: `${offPeakWindowEnd}-${String(planningWindowEndHour).padStart(2, '0')}:00`,
       },
     };
   }

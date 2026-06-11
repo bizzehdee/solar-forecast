@@ -89,8 +89,8 @@ export class AppComponent implements OnInit, AfterViewInit {
 
     return `Assumptions: ${assumptions.capacity_kwh} kWh battery, ${assumptions.reserve_percent_floor}% reserve floor, `
       + `${assumptions.assumed_daily_usage_kwh} kWh/day usage, planning window ${assumptions.planning_window}, `
-      + `${assumptions.night_load_kwh_per_hour} kWh/hour from 00:00 for ${assumptions.night_hours_to_target} hours, `
-      + `${assumptions.soc_rounding_step_percent}% SoC rounding step, current day 06:00 SoC ${currentSocText}, `
+      + `${assumptions.night_load_kwh_per_hour} kWh/hour during off-peak ${assumptions.off_peak_window}, `
+      + `${assumptions.soc_rounding_step_percent}% SoC rounding step, current day SoC at ${assumptions.off_peak_end_label} ${currentSocText}, `
       + `strategy ${assumptions.strategy}, off-peak ${assumptions.off_peak_cost_p_per_kwh.toFixed(2)}p/kWh, `
       + `on-peak ${assumptions.on_peak_cost_p_per_kwh.toFixed(2)}p/kWh, `
       + `sell-back ${assumptions.sell_back_price_p_per_kwh.toFixed(2)}p/kWh.`;
@@ -98,6 +98,14 @@ export class AppComponent implements OnInit, AfterViewInit {
 
   get hasBattery(): boolean {
     return this.config.battery_capacity_kwh > 0;
+  }
+
+  get offPeakWindowLabel(): string {
+    return `${this.config.off_peak_window_start}-${this.config.off_peak_window_end}`;
+  }
+
+  get offPeakEndLabel(): string {
+    return this.config.off_peak_window_end;
   }
 
   trackDay(_: number, day: DayForecast): string {
