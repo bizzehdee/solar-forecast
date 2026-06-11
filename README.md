@@ -1,6 +1,6 @@
-# Solar Forcast
+# Solar Forecast
 
-Solar Forcast is an Angular dashboard that estimates PV generation from Open-Meteo forecast data and produces a battery/grid charging plan.
+Solar Forecast is an Angular dashboard that estimates PV generation from Open-Meteo forecast data and produces a battery/grid charging plan.
 
 ## What it does
 

@@ -1,0 +1,64 @@
+name: Build and deploy to S3
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      S3_BUCKET: ${{ vars.S3_BUCKET }}
+      APP_BASE_HREF: ${{ vars.APP_BASE_HREF }}
+      S3_PREFIX: ${{ vars.S3_PREFIX }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build app
+        run: |
+          BASE_HREF="${APP_BASE_HREF:-/}"
+          case "$BASE_HREF" in
+            /*) ;;
+            *) BASE_HREF="/$BASE_HREF" ;;
+          esac
+          case "$BASE_HREF" in
+            */) ;;
+            *) BASE_HREF="$BASE_HREF/" ;;
+          esac
+          npm run build -- --base-href "$BASE_HREF" --deploy-url "$BASE_HREF"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy to S3
+        run: |
+          TARGET_PREFIX="${S3_PREFIX#/}"
+          if [ -n "$TARGET_PREFIX" ]; then
+            TARGET_PREFIX="${TARGET_PREFIX%/}/"
+          fi
+          BUILD_DIR="dist/frontend/browser"
+          if [ ! -d "$BUILD_DIR" ]; then
+            BUILD_DIR="dist/frontend"
+          fi
+          aws s3 sync "$BUILD_DIR/" "s3://${S3_BUCKET}/${TARGET_PREFIX}" --delete
