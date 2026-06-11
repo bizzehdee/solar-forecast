@@ -79,7 +79,7 @@ export class AppComponent implements OnInit, AfterViewInit {
   }
 
   get assumptionsText(): string {
-    if (!this.payload) {
+    if (!this.payload || !this.hasBattery) {
       return '';
     }
     const assumptions = this.payload.battery_assumptions;
@@ -94,6 +94,10 @@ export class AppComponent implements OnInit, AfterViewInit {
       + `strategy ${assumptions.strategy}, off-peak ${assumptions.off_peak_cost_p_per_kwh.toFixed(2)}p/kWh, `
       + `on-peak ${assumptions.on_peak_cost_p_per_kwh.toFixed(2)}p/kWh, `
       + `sell-back ${assumptions.sell_back_price_p_per_kwh.toFixed(2)}p/kWh.`;
+  }
+
+  get hasBattery(): boolean {
+    return this.config.battery_capacity_kwh > 0;
   }
 
   trackDay(_: number, day: DayForecast): string {

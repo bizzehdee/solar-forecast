@@ -12,8 +12,8 @@
     <div><label for="controller_max_output_watts">Controller Max Output (opt)</label><input id="controller_max_output_watts" type="number" [(ngModel)]="config.controller_max_output_watts" /></div>
     <div><label for="battery_capacity_kwh">Battery capacity (kWh)</label><input id="battery_capacity_kwh" type="number" step="0.1" [(ngModel)]="config.battery_capacity_kwh" /></div>
     <div><label for="assumed_daily_usage_kwh">Average daily consumption (kWh)</label><input id="assumed_daily_usage_kwh" type="number" step="0.1" [(ngModel)]="config.assumed_daily_usage_kwh" /></div>
-    <div><label for="current_soc_at_0600_percent">Today's SoC at 06:00 (%)</label><input id="current_soc_at_0600_percent" type="number" [(ngModel)]="config.current_soc_at_0600_percent" /></div>
-    <div>
+    <div *ngIf="hasBattery"><label for="current_soc_at_0600_percent">Today's SoC at 06:00 (%)</label><input id="current_soc_at_0600_percent" type="number" [(ngModel)]="config.current_soc_at_0600_percent" /></div>
+    <div *ngIf="hasBattery">
       <label for="strategy">Strategy</label>
       <select id="strategy" [(ngModel)]="config.strategy">
         <option value="sell-all">sell-all</option>
@@ -58,7 +58,7 @@
   </div>
 </div>
 
-<div class="card" *ngIf="payload as p">
+<div class="card" *ngIf="payload && hasBattery">
   <h2>Recommended grid target charge before 06:00</h2>
   <div class="small-note">{{ assumptionsText }}</div>
   <table>
@@ -75,7 +75,7 @@
       </tr>
     </thead>
     <tbody>
-      <tr *ngFor="let row of p.battery_plan; trackBy: trackPlanRow">
+      <tr *ngFor="let row of payload!.battery_plan; trackBy: trackPlanRow">
         <td>{{ row.date }}</td>
         <td>{{ row.forecast_solar_kwh_day_total.toFixed(3) }}</td>
         <td><strong>{{ row.recommended_target_percent_before_6am.toFixed(1) }}%</strong></td>
