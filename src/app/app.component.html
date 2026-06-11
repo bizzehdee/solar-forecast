@@ -19,10 +19,18 @@
         <option value="zero-cost">zero-cost</option>
       </select>
     </div>
+
     <div><label for="off_peak_cost_p_per_kwh">Off-peak cost (p/kWh)</label><input id="off_peak_cost_p_per_kwh" type="number" step="0.01" [(ngModel)]="config.off_peak_cost_p_per_kwh" /></div>
     <div><label for="on_peak_cost_p_per_kwh">On-peak cost (p/kWh)</label><input id="on_peak_cost_p_per_kwh" type="number" step="0.01" [(ngModel)]="config.on_peak_cost_p_per_kwh" /></div>
     <div><label for="sell_back_price_p_per_kwh">Sell-back price (p/kWh)</label><input id="sell_back_price_p_per_kwh" type="number" step="0.01" [(ngModel)]="config.sell_back_price_p_per_kwh" /></div>
   </div>
+
+  <footer class="footer">
+    &copy; 2026
+    <a href="https://www.darrenhorrocks.co.uk/solar-forecast/" target="_blank" rel="noopener noreferrer">Solar Forecast</a>
+    ·
+    <a href="https://github.com/bizzehdee/solar-forecast" target="_blank" rel="noopener noreferrer">Source code on GitHub</a>
+  </footer>
   <button type="button" (click)="refresh()">Refresh forecast</button>
   <div id="status">{{ statusText }}</div>
 </div>
