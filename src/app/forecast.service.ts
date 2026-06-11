@@ -431,10 +431,20 @@ export class ForecastService {
     const overnightDrainWh = overnightDrainKwh * 1000.0;
     const daytimeLoadTotalWh = Math.max(0.0, (this.battery.assumed_daily_usage_kwh - overnightDrainKwh) * 1000.0);
 
-    for (const dayKey of Object.keys(daily).sort()) {
+    const sortedDayKeys = Object.keys(daily).sort();
+    for (const dayKey of sortedDayKeys) {
       const item = daily[dayKey];
       item.pv_dc_power_w_total = Number(item.pv_dc_power_w_total.toFixed(3));
       item.controller_output_power_w_total = Number(item.controller_output_power_w_total.toFixed(3));
+    }
+
+    const lastDayKey = sortedDayKeys[sortedDayKeys.length - 1];
+    if (lastDayKey && daily[lastDayKey].controller_output_power_w_total <= 0) {
+      sortedDayKeys.pop();
+    }
+
+    for (const dayKey of sortedDayKeys) {
+      const item = daily[dayKey];
       days.push(item);
       summaryLabels.push(dayKey);
       summaryValuesKwh.push(Number((item.controller_output_power_w_total / 1000.0).toFixed(3)));
