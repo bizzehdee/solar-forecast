@@ -19,6 +19,11 @@ import {
   ForecastService,
 } from './forecast.service';
 
+interface CachedForecastPayload {
+  expiresAt: number;
+  payload: ForecastPayload;
+}
+
 @Component({
   selector: 'app-root',
   imports: [CommonModule, FormsModule],
@@ -27,6 +32,8 @@ import {
 })
 export class AppComponent implements OnInit, AfterViewInit {
   private readonly storageKey = 'solar_forecast_dashboard_config_v1';
+  private readonly payloadCacheKey = 'solar_forecast_dashboard_payload_v1';
+  private readonly payloadCacheTtlMs = 10 * 60 * 1000;
 
   @ViewChild('summaryCanvas')
   summaryCanvas?: ElementRef<HTMLCanvasElement>;
@@ -62,12 +69,24 @@ export class AppComponent implements OnInit, AfterViewInit {
   }
 
   async refresh(): Promise<void> {
+    this.saveConfig(this.config);
+    this.config = this.forecastService.normalizeConfig(this.config);
+
+    const cachedPayload = this.loadCachedPayload(this.config);
+    if (cachedPayload) {
+      this.payload = cachedPayload;
+      this.statusText = `Loaded cached forecast. Days loaded: ${cachedPayload.days.length}`;
+
+      this.cdr.detectChanges();
+      this.renderCharts();
+      return;
+    }
+
     this.statusText = 'Fetching latest forecast...';
     try {
-      this.saveConfig(this.config);
-      this.config = this.forecastService.normalizeConfig(this.config);
       const payload = await this.forecastService.buildForecastPayload(this.config);
       this.payload = payload;
+      this.saveCachedPayload(payload);
       this.statusText = `Updated. Days loaded: ${payload.days.length}`;
 
       this.cdr.detectChanges();
@@ -141,6 +160,63 @@ export class AppComponent implements OnInit, AfterViewInit {
       return null;
     } catch {
       return null;
+    }
+  }
+
+  private saveCachedPayload(payload: ForecastPayload): void {
+    try {
+      const cachedPayload: CachedForecastPayload = {
+        expiresAt: Date.now() + this.payloadCacheTtlMs,
+        payload,
+      };
+      localStorage.setItem(this.payloadCacheKey, JSON.stringify(cachedPayload));
+    } catch {
+      // no-op if storage unavailable
+    }
+  }
+
+  private loadCachedPayload(config: ForecastConfig): ForecastPayload | null {
+    try {
+      const raw = localStorage.getItem(this.payloadCacheKey);
+      if (!raw) {
+        return null;
+      }
+
+      const parsed = JSON.parse(raw) as CachedForecastPayload | null;
+      if (!parsed || typeof parsed !== 'object') {
+        this.clearCachedPayload();
+        return null;
+      }
+
+      if (!Number.isFinite(parsed.expiresAt) || parsed.expiresAt <= Date.now()) {
+        this.clearCachedPayload();
+        return null;
+      }
+
+      const payload = parsed.payload;
+      if (!payload || typeof payload !== 'object' || !payload.config) {
+        this.clearCachedPayload();
+        return null;
+      }
+
+      const normalizedCachedConfig = this.forecastService.normalizeConfig(payload.config);
+      const normalizedRequestedConfig = this.forecastService.normalizeConfig(config);
+      if (JSON.stringify(normalizedCachedConfig) !== JSON.stringify(normalizedRequestedConfig)) {
+        return null;
+      }
+
+      return payload;
+    } catch {
+      this.clearCachedPayload();
+      return null;
+    }
+  }
+
+  private clearCachedPayload(): void {
+    try {
+      localStorage.removeItem(this.payloadCacheKey);
+    } catch {
+      // no-op if storage unavailable
     }
   }
 
