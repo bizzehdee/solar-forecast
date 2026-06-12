@@ -207,8 +207,78 @@ export class ForecastService {
   }
 
   async buildForecastPayload(config: ForecastConfig): Promise<ForecastPayload> {
-    const data = await this.fetchOpenMeteo(config);
-    return this.buildPayload(config, data);
+    const normalizedConfig = this.normalizeConfig(config);
+    const data = await this.fetchOpenMeteo(normalizedConfig);
+    return this.buildPayload(normalizedConfig, data);
+  }
+
+  rebuildForecastPayload(config: ForecastConfig, cachedPayload: ForecastPayload): ForecastPayload {
+    const normalizedConfig = this.normalizeConfig(config);
+    const weatherCompatibleConfig = {
+      ...normalizedConfig,
+      installed_watts: cachedPayload.config.installed_watts,
+      performance_ratio: cachedPayload.config.performance_ratio,
+      controller_efficiency: cachedPayload.config.controller_efficiency,
+      controller_max_output_watts: cachedPayload.config.controller_max_output_watts,
+    };
+
+    const weatherData = this.extractOpenMeteoResponse(cachedPayload);
+    return this.buildPayload(weatherCompatibleConfig, weatherData);
+  }
+
+  isCacheReusableForConfig(cachedConfig: ForecastConfig, requestedConfig: ForecastConfig): boolean {
+    const cached = this.normalizeConfig(cachedConfig);
+    const requested = this.normalizeConfig(requestedConfig);
+
+    return cached.latitude === requested.latitude
+      && cached.longitude === requested.longitude
+      && cached.tilt === requested.tilt
+      && cached.azimuth === requested.azimuth
+      && cached.installed_watts === requested.installed_watts
+      && cached.performance_ratio === requested.performance_ratio
+      && cached.controller_efficiency === requested.controller_efficiency
+      && cached.controller_max_output_watts === requested.controller_max_output_watts
+      && cached.timezone === requested.timezone;
+  }
+
+  private extractOpenMeteoResponse(payload: ForecastPayload): OpenMeteoResponse {
+    const time: string[] = [];
+    const global_tilted_irradiance: number[] = [];
+    const temperature_2m: number[] = [];
+    const wind_speed_10m: number[] = [];
+    const cloud_cover: number[] = [];
+    const config = this.normalizeConfig(payload.config);
+
+    for (const day of payload.days) {
+      for (let index = 0; index < day.times.length; index += 1) {
+        const controllerOutputW = day.controller_output_power_w[index] ?? 0.0;
+        const pvDcPowerW = day.pv_dc_power_w[index] ?? 0.0;
+        const cloudCoverPercent = day.cloud_cover_percent[index] ?? 0.0;
+        const irradianceRatio = config.installed_watts > 0 && config.performance_ratio > 0
+          ? pvDcPowerW / (config.installed_watts * config.performance_ratio)
+          : 0.0;
+
+        time.push(`${day.date}T${day.times[index]}`);
+        global_tilted_irradiance.push(Number(Math.max(0.0, irradianceRatio * 1000.0).toFixed(3)));
+        temperature_2m.push(20.0);
+        wind_speed_10m.push(0.0);
+        cloud_cover.push(Number(cloudCoverPercent.toFixed(2)));
+
+        if (config.controller_efficiency > 0 && config.controller_max_output_watts === null && controllerOutputW > 0 && pvDcPowerW <= 0) {
+          global_tilted_irradiance[global_tilted_irradiance.length - 1] = Number(((controllerOutputW / config.controller_efficiency) / Math.max(config.installed_watts * config.performance_ratio, 1) * 1000.0).toFixed(3));
+        }
+      }
+    }
+
+    return {
+      hourly: {
+        time,
+        global_tilted_irradiance,
+        temperature_2m,
+        wind_speed_10m,
+        cloud_cover,
+      },
+    };
   }
 
   private toNumberOrDefault(value: unknown, fallback: number): number {
