@@ -20,6 +20,7 @@ import {
 } from './forecast.service';
 
 interface CachedForecastPayload {
+  createdAt: number;
   expiresAt: number;
   payload: ForecastPayload;
 }
@@ -72,10 +73,10 @@ export class AppComponent implements OnInit, AfterViewInit {
     this.saveConfig(this.config);
     this.config = this.forecastService.normalizeConfig(this.config);
 
-    const cachedPayload = this.loadCachedPayload(this.config);
-    if (cachedPayload) {
-      this.payload = cachedPayload;
-      this.statusText = `Loaded cached forecast. Days loaded: ${cachedPayload.days.length}`;
+    const cachedForecast = this.loadCachedPayload(this.config);
+    if (cachedForecast) {
+      this.payload = cachedForecast.payload;
+      this.statusText = `Loaded cached forecast from ${this.formatCacheAge(cachedForecast.createdAt)} ago. Days loaded: ${cachedForecast.payload.days.length}`;
 
       this.cdr.detectChanges();
       this.renderCharts();
@@ -165,8 +166,10 @@ export class AppComponent implements OnInit, AfterViewInit {
 
   private saveCachedPayload(payload: ForecastPayload): void {
     try {
+      const now = Date.now();
       const cachedPayload: CachedForecastPayload = {
-        expiresAt: Date.now() + this.payloadCacheTtlMs,
+        createdAt: now,
+        expiresAt: now + this.payloadCacheTtlMs,
         payload,
       };
       localStorage.setItem(this.payloadCacheKey, JSON.stringify(cachedPayload));
@@ -175,7 +178,7 @@ export class AppComponent implements OnInit, AfterViewInit {
     }
   }
 
-  private loadCachedPayload(config: ForecastConfig): ForecastPayload | null {
+  private loadCachedPayload(config: ForecastConfig): CachedForecastPayload | null {
     try {
       const raw = localStorage.getItem(this.payloadCacheKey);
       if (!raw) {
@@ -188,7 +191,7 @@ export class AppComponent implements OnInit, AfterViewInit {
         return null;
       }
 
-      if (!Number.isFinite(parsed.expiresAt) || parsed.expiresAt <= Date.now()) {
+      if (!Number.isFinite(parsed.createdAt) || !Number.isFinite(parsed.expiresAt) || parsed.expiresAt <= Date.now()) {
         this.clearCachedPayload();
         return null;
       }
@@ -205,7 +208,7 @@ export class AppComponent implements OnInit, AfterViewInit {
         return null;
       }
 
-      return payload;
+      return parsed;
     } catch {
       this.clearCachedPayload();
       return null;
@@ -218,6 +221,23 @@ export class AppComponent implements OnInit, AfterViewInit {
     } catch {
       // no-op if storage unavailable
     }
+  }
+
+  private formatCacheAge(createdAt: number): string {
+    const ageMs = Math.max(0, Date.now() - createdAt);
+    const ageSeconds = Math.floor(ageMs / 1000);
+
+    if (ageSeconds < 60) {
+      return ageSeconds === 1 ? '1 second' : `${ageSeconds} seconds`;
+    }
+
+    const ageMinutes = Math.floor(ageSeconds / 60);
+    if (ageMinutes < 60) {
+      return ageMinutes === 1 ? '1 minute' : `${ageMinutes} minutes`;
+    }
+
+    const ageHours = Math.floor(ageMinutes / 60);
+    return ageHours === 1 ? '1 hour' : `${ageHours} hours`;
   }
 
   private renderCharts(): void {
