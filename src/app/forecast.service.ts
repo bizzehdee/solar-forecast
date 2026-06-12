@@ -15,6 +15,9 @@ interface ForecastConfig {
   controller_max_output_watts: number | null;
   battery_capacity_kwh: number;
   assumed_daily_usage_kwh: number;
+  reserve_percent_floor: number;
+  night_load_kwh_per_hour: number;
+  soc_rounding_step_percent: number;
   current_soc_at_0600_percent: number | null;
   strategy: Strategy;
   off_peak_cost_p_per_kwh: number;
@@ -30,17 +33,6 @@ interface PanelModelConfig {
   noct_c: number;
   low_light_gain: number;
   wind_cooling_c_per_m_s: number;
-}
-
-interface BatteryConfig {
-  capacity_kwh: number;
-  reserve_percent_floor: number;
-  assumed_daily_usage_kwh: number;
-  planning_window_start_hour: number;
-  planning_window_end_hour: number;
-  night_load_kwh_per_hour: number;
-  night_hours_to_target: number;
-  soc_rounding_step_percent: number;
 }
 
 interface OpenMeteoResponse {
@@ -137,6 +129,9 @@ export class ForecastService {
     controller_max_output_watts: null,
     battery_capacity_kwh: 16.0,
     assumed_daily_usage_kwh: 14.0,
+    reserve_percent_floor: 10.0,
+    night_load_kwh_per_hour: 0.3,
+    soc_rounding_step_percent: 5.0,
     current_soc_at_0600_percent: null,
     strategy: 'zero-cost',
     off_peak_cost_p_per_kwh: 0.0,
@@ -152,17 +147,6 @@ export class ForecastService {
     noct_c: 44.0,
     low_light_gain: 0.04,
     wind_cooling_c_per_m_s: 0.6,
-  };
-
-  private readonly battery: BatteryConfig = {
-    capacity_kwh: 16.0,
-    reserve_percent_floor: 10.0,
-    assumed_daily_usage_kwh: 14.0,
-    planning_window_start_hour: 6,
-    planning_window_end_hour: 24,
-    night_load_kwh_per_hour: 0.3,
-    night_hours_to_target: 6,
-    soc_rounding_step_percent: 5.0,
   };
 
   constructor(private readonly http: HttpClient) {}
@@ -191,6 +175,23 @@ export class ForecastService {
       ),
       battery_capacity_kwh: this.toNumberOrDefault(rawConfig.battery_capacity_kwh, this.defaultConfig.battery_capacity_kwh),
       assumed_daily_usage_kwh: this.toNumberOrDefault(rawConfig.assumed_daily_usage_kwh, this.defaultConfig.assumed_daily_usage_kwh),
+      reserve_percent_floor: this.toBoundedNumber(
+        rawConfig.reserve_percent_floor,
+        this.defaultConfig.reserve_percent_floor,
+        0.0,
+        100.0,
+      ),
+      night_load_kwh_per_hour: this.toBoundedNumber(
+        rawConfig.night_load_kwh_per_hour,
+        this.defaultConfig.night_load_kwh_per_hour,
+        0.0,
+      ),
+      soc_rounding_step_percent: this.toBoundedNumber(
+        rawConfig.soc_rounding_step_percent,
+        this.defaultConfig.soc_rounding_step_percent,
+        0.1,
+        100.0,
+      ),
       current_soc_at_0600_percent: this.toOptionalNumber(
         rawConfig.current_soc_at_0600_percent,
         this.defaultConfig.current_soc_at_0600_percent,
@@ -224,6 +225,14 @@ export class ForecastService {
     }
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : fallback;
+  }
+
+  private toBoundedNumber(value: unknown, fallback: number, min: number, max?: number): number {
+    const parsed = this.toNumberOrDefault(value, fallback);
+    if (max === undefined) {
+      return Math.max(min, parsed);
+    }
+    return Math.min(max, Math.max(min, parsed));
   }
 
   private normalizeTimeValue(value: unknown, fallback: string): string {
@@ -306,11 +315,13 @@ export class ForecastService {
     day: DayForecast,
     batteryCapacityKwh: number,
     assumedDailyUsageKwh: number,
+    reservePercentFloor: number,
+    socRoundingStepPercent: number,
     planningWindowStartHour: number,
     planningWindowEndHour: number,
   ): BatteryPlanRow {
     const capacityWh = batteryCapacityKwh * 1000.0;
-    const reserveWh = capacityWh * (this.battery.reserve_percent_floor / 100.0);
+    const reserveWh = capacityWh * (reservePercentFloor / 100.0);
     const loadWhPerHour = (assumedDailyUsageKwh * 1000.0) / 24.0;
     const planningHours = day.times
       .map((timeLabel, idx) => ({ hour: this.hourFromTimeLabel(timeLabel), solarWh: day.controller_output_power_w[idx] }))
@@ -334,7 +345,7 @@ export class ForecastService {
     const targetPercent = (targetSocWh / capacityWh) * 100.0;
     const roundedTargetPercent = Math.min(
       100.0,
-      Math.ceil(targetPercent / this.battery.soc_rounding_step_percent) * this.battery.soc_rounding_step_percent,
+      Math.ceil(targetPercent / socRoundingStepPercent) * socRoundingStepPercent,
     );
     const roundedTargetSocWh = capacityWh * (roundedTargetPercent / 100.0);
     const gridChargeFromFloorKwh = Math.max(0.0, (roundedTargetSocWh - reserveWh) / 1000.0);
@@ -470,14 +481,17 @@ export class ForecastService {
     const batteryCapacityKwh = Math.max(0.0, config.battery_capacity_kwh);
     const hasBattery = batteryCapacityKwh > 0;
     const assumedDailyUsageKwh = Math.max(0.0, config.assumed_daily_usage_kwh);
+    const reservePercentFloor = config.reserve_percent_floor;
+    const nightLoadKwhPerHour = config.night_load_kwh_per_hour;
+    const socRoundingStepPercent = config.soc_rounding_step_percent;
     const offPeakWindowStart = config.off_peak_window_start;
     const offPeakWindowEnd = config.off_peak_window_end;
     const planningWindowStartHour = this.timeToHour(offPeakWindowEnd);
     const planningWindowEndHour = 24.0;
     const offPeakWindowDurationHours = this.durationHours(offPeakWindowStart, offPeakWindowEnd);
     const capacityWh = batteryCapacityKwh * 1000.0;
-    const reserveWh = capacityWh * (this.battery.reserve_percent_floor / 100.0);
-    const overnightDrainKwh = this.battery.night_load_kwh_per_hour * offPeakWindowDurationHours;
+    const reserveWh = capacityWh * (reservePercentFloor / 100.0);
+    const overnightDrainKwh = nightLoadKwhPerHour * offPeakWindowDurationHours;
     const overnightDrainWh = overnightDrainKwh * 1000.0;
     const daytimeLoadTotalWh = Math.max(0.0, (assumedDailyUsageKwh - overnightDrainKwh) * 1000.0);
 
@@ -504,6 +518,8 @@ export class ForecastService {
             item,
             batteryCapacityKwh,
             assumedDailyUsageKwh,
+            reservePercentFloor,
+            socRoundingStepPercent,
             planningWindowStartHour,
             planningWindowEndHour,
           ),
@@ -620,11 +636,11 @@ export class ForecastService {
       battery_plan: batteryPlan,
       battery_assumptions: {
         capacity_kwh: batteryCapacityKwh,
-        reserve_percent_floor: this.battery.reserve_percent_floor,
+        reserve_percent_floor: reservePercentFloor,
         assumed_daily_usage_kwh: assumedDailyUsageKwh,
-        night_load_kwh_per_hour: this.battery.night_load_kwh_per_hour,
+        night_load_kwh_per_hour: nightLoadKwhPerHour,
         night_hours_to_target: offPeakWindowDurationHours,
-        soc_rounding_step_percent: this.battery.soc_rounding_step_percent,
+        soc_rounding_step_percent: socRoundingStepPercent,
         current_soc_at_0600_percent: hasBattery ? config.current_soc_at_0600_percent : null,
         strategy: config.strategy,
         off_peak_cost_p_per_kwh: config.off_peak_cost_p_per_kwh,
