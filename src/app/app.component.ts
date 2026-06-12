@@ -75,8 +75,8 @@ export class AppComponent implements OnInit, AfterViewInit {
 
     const cachedForecast = this.loadCachedPayload(this.config);
     if (cachedForecast) {
-      this.payload = cachedForecast.payload;
-      this.statusText = `Loaded cached forecast from ${this.formatCacheAge(cachedForecast.createdAt)} ago. Days loaded: ${cachedForecast.payload.days.length}`;
+      this.payload = this.forecastService.rebuildForecastPayload(this.config, cachedForecast.payload);
+      this.statusText = `Loaded cached forecast from ${this.formatCacheAge(cachedForecast.createdAt)} ago. Days loaded: ${this.payload.days.length}`;
 
       this.cdr.detectChanges();
       this.renderCharts();
@@ -202,9 +202,7 @@ export class AppComponent implements OnInit, AfterViewInit {
         return null;
       }
 
-      const normalizedCachedConfig = this.forecastService.normalizeConfig(payload.config);
-      const normalizedRequestedConfig = this.forecastService.normalizeConfig(config);
-      if (JSON.stringify(normalizedCachedConfig) !== JSON.stringify(normalizedRequestedConfig)) {
+      if (!this.forecastService.isCacheReusableForConfig(payload.config, config)) {
         return null;
       }
 
