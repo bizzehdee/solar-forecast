@@ -12,6 +12,9 @@
     <div><label for="controller_max_output_watts">Controller Max Output (opt)</label><input id="controller_max_output_watts" type="number" [(ngModel)]="config.controller_max_output_watts" /></div>
     <div><label for="battery_capacity_kwh">Battery capacity (kWh)</label><input id="battery_capacity_kwh" type="number" step="0.1" [(ngModel)]="config.battery_capacity_kwh" /></div>
     <div><label for="assumed_daily_usage_kwh">Average daily consumption (kWh)</label><input id="assumed_daily_usage_kwh" type="number" step="0.1" [(ngModel)]="config.assumed_daily_usage_kwh" /></div>
+    <div *ngIf="hasBattery"><label for="reserve_percent_floor">Reserve floor (%)</label><input id="reserve_percent_floor" type="number" step="0.1" [(ngModel)]="config.reserve_percent_floor" /></div>
+    <div *ngIf="hasBattery"><label for="night_load_kwh_per_hour">Night load (kWh/hour)</label><input id="night_load_kwh_per_hour" type="number" step="0.01" [(ngModel)]="config.night_load_kwh_per_hour" /></div>
+    <div *ngIf="hasBattery"><label for="soc_rounding_step_percent">SoC rounding step (%)</label><input id="soc_rounding_step_percent" type="number" step="0.1" [(ngModel)]="config.soc_rounding_step_percent" /></div>
     <div *ngIf="hasBattery"><label for="current_soc_at_0600_percent">Today's SoC at off-peak end (%)</label><input id="current_soc_at_0600_percent" type="number" [(ngModel)]="config.current_soc_at_0600_percent" /></div>
     <div *ngIf="hasBattery">
       <label for="strategy">Strategy</label>
@@ -71,7 +74,7 @@
         <th>Recommended target by {{ offPeakEndLabel }}</th>
         <th>Target energy (kWh)</th>
         <th>Grid charge {{ offPeakWindowLabel }}</th>
-        <th>Grid top-up above 10% floor (kWh)</th>
+        <th>Grid top-up above {{ config.reserve_percent_floor.toFixed(1) }}% floor (kWh)</th>
         <th>Projected end-of-day SoC</th>
         <th>Daily cost/earnings (p)</th>
       </tr>
