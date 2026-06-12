@@ -22,6 +22,17 @@ h2 {
   margin-bottom: 16px;
 }
 
+.settings-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+.settings-card {
+  margin-bottom: 0;
+}
+
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
@@ -119,4 +130,10 @@ th {
 
 .footer a:hover {
   text-decoration: underline;
+}
+
+@media (max-width: 799px) {
+  .settings-layout {
+    grid-template-columns: 1fr;
+  }
 }
