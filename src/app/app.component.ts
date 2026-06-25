@@ -3,6 +3,7 @@ import {
   ChangeDetectorRef,
   Component,
   ElementRef,
+  OnDestroy,
   OnInit,
   QueryList,
   ViewChild,
@@ -32,10 +33,11 @@ interface CachedForecastPayload {
   templateUrl: './app.component.html',
   styleUrl: './app.component.css',
 })
-export class AppComponent implements OnInit, AfterViewInit {
+export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
   private readonly storageKey = 'solar_forecast_dashboard_config_v1';
   private readonly payloadCacheKey = 'solar_forecast_dashboard_payload_v1';
   private readonly payloadCacheTtlMs = 10 * 60 * 1000;
+  private readonly progressTickMs = 5 * 60 * 1000;
 
   @ViewChild('summaryCanvas')
   summaryCanvas?: ElementRef<HTMLCanvasElement>;
@@ -47,9 +49,14 @@ export class AppComponent implements OnInit, AfterViewInit {
   payload: ForecastPayload | null = null;
   statusText = '';
 
+  todayForecastKwh = 0;
+  todayGeneratedKwh = 0;
+  todayProgressPercent = 0;
+
   private summaryChart: Chart | null = null;
   private dayCharts: Chart[] = [];
   private viewReady = false;
+  private progressTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private readonly forecastService: ForecastService,
@@ -68,6 +75,20 @@ export class AppComponent implements OnInit, AfterViewInit {
   ngAfterViewInit(): void {
     this.viewReady = true;
     this.refresh().catch(() => undefined);
+
+    // Keep the progress bar advancing through the day independently of when
+    // (or whether) the forecast data is refreshed.
+    this.progressTimer = setInterval(() => {
+      this.updateTodayProgress();
+      this.cdr.detectChanges();
+    }, this.progressTickMs);
+  }
+
+  ngOnDestroy(): void {
+    if (this.progressTimer !== null) {
+      clearInterval(this.progressTimer);
+      this.progressTimer = null;
+    }
   }
 
   async refresh(): Promise<void> {
@@ -252,8 +273,59 @@ export class AppComponent implements OnInit, AfterViewInit {
     if (!this.viewReady || !this.payload) {
       return;
     }
+    this.updateTodayProgress();
     this.renderSummaryChart();
     this.renderDayCharts();
+  }
+
+  /**
+   * Recompute how much of today's forecast solar has been produced so far,
+   * based on the current local time of day. The hourly controller output
+   * values are treated as Wh over each hour; the current hour is prorated by
+   * how far into it we are. Runs both on refresh and on a 5-minute timer so
+   * the bar keeps filling even if the forecast data is not refreshed.
+   */
+  private updateTodayProgress(): void {
+    const today = this.findTodayForecast();
+    if (!today) {
+      this.todayForecastKwh = 0;
+      this.todayGeneratedKwh = 0;
+      this.todayProgressPercent = 0;
+      return;
+    }
+
+    const now = new Date();
+    const currentHourFloat = now.getHours() + now.getMinutes() / 60 + now.getSeconds() / 3600;
+
+    let generatedWh = 0;
+    for (let i = 0; i < today.times.length; i += 1) {
+      const hour = Number.parseInt(today.times[i].split(':', 1)[0], 10);
+      const powerW = today.controller_output_power_w[i] ?? 0;
+      if (!Number.isFinite(hour)) {
+        continue;
+      }
+      if (currentHourFloat >= hour + 1) {
+        generatedWh += powerW;
+      } else if (currentHourFloat > hour) {
+        generatedWh += powerW * (currentHourFloat - hour);
+      }
+    }
+
+    const totalWh = today.controller_output_power_w_total;
+    this.todayForecastKwh = totalWh / 1000;
+    this.todayGeneratedKwh = generatedWh / 1000;
+    this.todayProgressPercent = totalWh > 0
+      ? Math.max(0, Math.min(100, (generatedWh / totalWh) * 100))
+      : 0;
+  }
+
+  private findTodayForecast(): DayForecast | null {
+    if (!this.payload || this.payload.days.length === 0) {
+      return null;
+    }
+    const now = new Date();
+    const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    return this.payload.days.find((day) => day.date === todayKey) ?? this.payload.days[0];
   }
 
   private renderSummaryChart(): void {

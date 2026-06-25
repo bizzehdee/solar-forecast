@@ -56,6 +56,13 @@
 
 <div class="card" *ngIf="payload as p">
   <h2>Summary chart (daily total controller output)</h2>
+  <div class="solar-progress" *ngIf="todayForecastKwh > 0">
+    <span class="solar-progress-label">Today:</span>
+    <div class="solar-progress-track">
+      <div class="solar-progress-fill" [style.width.%]="todayProgressPercent"></div>
+    </div>
+    <span class="solar-progress-value">{{ todayForecastKwh.toFixed(1) }} kWh</span>
+  </div>
   <canvas #summaryCanvas height="100"></canvas>
   <div class="totals">
     Forecast total controller output: {{ p.summary.forecast_total_controller_output_kwh.toFixed(3) }} kWh |
