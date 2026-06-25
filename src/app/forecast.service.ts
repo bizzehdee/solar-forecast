@@ -103,12 +103,45 @@ interface ForecastSummary {
   forecast_total_pv_dc_kwh: number;
 }
 
+interface StrategyComparison {
+  strategy: Strategy;
+  label: string;
+  total_off_peak_import_kwh: number;
+  total_on_peak_import_kwh: number;
+  total_solar_export_kwh: number;
+  total_cost_off_peak_pence: number;
+  total_cost_on_peak_pence: number;
+  total_earnings_export_pence: number;
+  total_net_pence: number;
+}
+
+interface StrategyRecommendation {
+  recommended_strategy: Strategy;
+  recommended_label: string;
+  is_current_strategy: boolean;
+  horizon_days: number;
+  best: StrategyComparison;
+  comparisons: StrategyComparison[];
+  explanation: string;
+}
+
+interface StrategyPlanContext {
+  capacityWh: number;
+  reserveWh: number;
+  currentDayStartSocWh: number | null;
+  overnightDrainWh: number;
+  daytimeLoadTotalWh: number;
+  planningWindowStartHour: number;
+  planningWindowEndHour: number;
+}
+
 export interface ForecastPayload {
   config: ForecastConfig;
   days: DayForecast[];
   summary: ForecastSummary;
   battery_plan: BatteryPlanRow[];
   battery_assumptions: BatteryAssumptions;
+  strategy_recommendation: StrategyRecommendation | null;
 }
 
 @Injectable({
@@ -547,7 +580,7 @@ export class ForecastService {
     const days: DayForecast[] = [];
     const summaryLabels: string[] = [];
     const summaryValuesKwh: number[] = [];
-    const batteryPlan: BatteryPlanRow[] = [];
+    const baseTargetRows: BatteryPlanRow[] = [];
     const batteryCapacityKwh = Math.max(0.0, config.battery_capacity_kwh);
     const hasBattery = batteryCapacityKwh > 0;
     const assumedDailyUsageKwh = Math.max(0.0, config.assumed_daily_usage_kwh);
@@ -583,7 +616,7 @@ export class ForecastService {
       summaryLabels.push(dayKey);
       summaryValuesKwh.push(Number((item.controller_output_power_w_total / 1000.0).toFixed(3)));
       if (hasBattery) {
-        batteryPlan.push(
+        baseTargetRows.push(
           this.recommendGridTarget(
             item,
             batteryCapacityKwh,
@@ -601,9 +634,75 @@ export class ForecastService {
       ? null
       : capacityWh * Math.max(0.0, Math.min(config.current_soc_at_0600_percent, 100.0)) / 100.0;
 
+    const planContext: StrategyPlanContext = {
+      capacityWh,
+      reserveWh,
+      currentDayStartSocWh,
+      overnightDrainWh,
+      daytimeLoadTotalWh,
+      planningWindowStartHour,
+      planningWindowEndHour,
+    };
+
+    const batteryPlan = hasBattery
+      ? this.runStrategyPlan(config.strategy, days, baseTargetRows, config, planContext)
+      : [];
+
+    const strategyRecommendation = hasBattery
+      ? this.recommendStrategy(days, baseTargetRows, config, planContext)
+      : null;
+
+    return {
+      config,
+      days,
+      summary: {
+        labels: summaryLabels,
+        controller_output_kwh_total_by_day: summaryValuesKwh,
+        forecast_total_controller_output_kwh: Number((forecastTotalController / 1000.0).toFixed(3)),
+        forecast_total_pv_dc_kwh: Number((forecastTotalPv / 1000.0).toFixed(3)),
+      },
+      battery_plan: batteryPlan,
+      battery_assumptions: {
+        capacity_kwh: batteryCapacityKwh,
+        reserve_percent_floor: reservePercentFloor,
+        assumed_daily_usage_kwh: assumedDailyUsageKwh,
+        night_load_kwh_per_hour: nightLoadKwhPerHour,
+        night_hours_to_target: offPeakWindowDurationHours,
+        soc_rounding_step_percent: socRoundingStepPercent,
+        current_soc_at_0600_percent: hasBattery ? config.current_soc_at_0600_percent : null,
+        strategy: config.strategy,
+        off_peak_cost_p_per_kwh: config.off_peak_cost_p_per_kwh,
+        off_peak_window: `${offPeakWindowStart}-${offPeakWindowEnd}`,
+        off_peak_end_label: offPeakWindowEnd,
+        on_peak_cost_p_per_kwh: config.on_peak_cost_p_per_kwh,
+        sell_back_price_p_per_kwh: config.sell_back_price_p_per_kwh,
+        planning_window: `${offPeakWindowEnd}-${String(planningWindowEndHour).padStart(2, '0')}:00`,
+      },
+      strategy_recommendation: strategyRecommendation,
+    };
+  }
+
+  private runStrategyPlan(
+    strategy: Strategy,
+    days: DayForecast[],
+    baseTargetRows: BatteryPlanRow[],
+    config: ForecastConfig,
+    ctx: StrategyPlanContext,
+  ): BatteryPlanRow[] {
+    const {
+      capacityWh,
+      reserveWh,
+      currentDayStartSocWh,
+      overnightDrainWh,
+      daytimeLoadTotalWh,
+      planningWindowStartHour,
+      planningWindowEndHour,
+    } = ctx;
+    const rows = baseTargetRows.map((row) => ({ ...row }));
+
     let previousProjectedEndSocWh: number | null = null;
-    for (let index = 0; index < batteryPlan.length; index += 1) {
-      const row = batteryPlan[index];
+    for (let index = 0; index < rows.length; index += 1) {
+      const row = rows[index];
       const dayEntry = days[index];
       const planningHours = dayEntry.times
         .map((timeLabel, i) => ({ hour: this.hourFromTimeLabel(timeLabel), solarWh: dayEntry.controller_output_power_w[i] }))
@@ -612,11 +711,11 @@ export class ForecastService {
       const loadWhPerHour = planningHours.length ? daytimeLoadTotalWh / planningHours.length : 0.0;
 
       let targetSocWh: number;
-      if (config.strategy === 'sell-all' || config.strategy === 'balanced') {
+      if (strategy === 'sell-all' || strategy === 'balanced') {
         targetSocWh = capacityWh;
         row.recommended_target_percent_before_6am = 100.0;
-        row.recommended_target_energy_kwh = Number(batteryCapacityKwh.toFixed(3));
-        row.grid_charge_from_reserve_floor_kwh = Number(Math.max(0.0, batteryCapacityKwh - (reserveWh / 1000.0)).toFixed(3));
+        row.recommended_target_energy_kwh = Number((capacityWh / 1000.0).toFixed(3));
+        row.grid_charge_from_reserve_floor_kwh = Number(Math.max(0.0, (capacityWh - reserveWh) / 1000.0).toFixed(3));
       } else {
         targetSocWh = row.recommended_target_energy_kwh * 1000.0;
       }
@@ -652,7 +751,7 @@ export class ForecastService {
         }
       }
 
-      if (config.strategy === 'sell-all' || config.strategy === 'balanced') {
+      if (strategy === 'sell-all' || strategy === 'balanced') {
         if (index === 0 && currentDayStartSocWh === null) {
           row.grid_charge_0000_0600_recommendation = 'ON';
           startSocWh = targetSocWh;
@@ -665,7 +764,7 @@ export class ForecastService {
         }
       }
 
-      const simulation = this.simulateDayStrategy(config.strategy, planningHours, startSocWh, loadWhPerHour, capacityWh, reserveWh);
+      const simulation = this.simulateDayStrategy(strategy, planningHours, startSocWh, loadWhPerHour, capacityWh, reserveWh);
       const projectedEndSocWh = Math.max(0.0, Math.min(simulation.end_soc_wh, capacityWh));
       const projectedMinSocWh = Math.max(0.0, Math.min(simulation.min_soc_wh, capacityWh));
       previousProjectedEndSocWh = projectedEndSocWh;
@@ -694,34 +793,137 @@ export class ForecastService {
       row.projected_reserve_breach = projectedMinSocWh < reserveWh;
     }
 
+    return rows;
+  }
+
+  private strategyLabel(strategy: Strategy): string {
+    switch (strategy) {
+      case 'sell-all':
+        return 'Sell all';
+      case 'balanced':
+        return 'Balanced';
+      case 'zero-cost':
+        return 'Zero cost';
+      default:
+        return strategy;
+    }
+  }
+
+  private summarizeStrategy(strategy: Strategy, rows: BatteryPlanRow[]): StrategyComparison {
+    let offPeakImportKwh = 0.0;
+    let onPeakImportKwh = 0.0;
+    let solarExportKwh = 0.0;
+    let costOffPeakP = 0.0;
+    let costOnPeakP = 0.0;
+    let earningsExportP = 0.0;
+    let netP = 0.0;
+
+    for (const row of rows) {
+      offPeakImportKwh += row.off_peak_import_kwh ?? 0.0;
+      onPeakImportKwh += row.on_peak_import_kwh ?? 0.0;
+      solarExportKwh += row.solar_export_kwh ?? 0.0;
+      costOffPeakP += row.daily_cost_off_peak_pence ?? 0.0;
+      costOnPeakP += row.daily_cost_on_peak_pence ?? 0.0;
+      earningsExportP += row.daily_earnings_export_pence ?? 0.0;
+      netP += row.daily_net_pence ?? 0.0;
+    }
+
     return {
-      config,
-      days,
-      summary: {
-        labels: summaryLabels,
-        controller_output_kwh_total_by_day: summaryValuesKwh,
-        forecast_total_controller_output_kwh: Number((forecastTotalController / 1000.0).toFixed(3)),
-        forecast_total_pv_dc_kwh: Number((forecastTotalPv / 1000.0).toFixed(3)),
-      },
-      battery_plan: batteryPlan,
-      battery_assumptions: {
-        capacity_kwh: batteryCapacityKwh,
-        reserve_percent_floor: reservePercentFloor,
-        assumed_daily_usage_kwh: assumedDailyUsageKwh,
-        night_load_kwh_per_hour: nightLoadKwhPerHour,
-        night_hours_to_target: offPeakWindowDurationHours,
-        soc_rounding_step_percent: socRoundingStepPercent,
-        current_soc_at_0600_percent: hasBattery ? config.current_soc_at_0600_percent : null,
-        strategy: config.strategy,
-        off_peak_cost_p_per_kwh: config.off_peak_cost_p_per_kwh,
-        off_peak_window: `${offPeakWindowStart}-${offPeakWindowEnd}`,
-        off_peak_end_label: offPeakWindowEnd,
-        on_peak_cost_p_per_kwh: config.on_peak_cost_p_per_kwh,
-        sell_back_price_p_per_kwh: config.sell_back_price_p_per_kwh,
-        planning_window: `${offPeakWindowEnd}-${String(planningWindowEndHour).padStart(2, '0')}:00`,
-      },
+      strategy,
+      label: this.strategyLabel(strategy),
+      total_off_peak_import_kwh: Number(offPeakImportKwh.toFixed(3)),
+      total_on_peak_import_kwh: Number(onPeakImportKwh.toFixed(3)),
+      total_solar_export_kwh: Number(solarExportKwh.toFixed(3)),
+      total_cost_off_peak_pence: Number(costOffPeakP.toFixed(2)),
+      total_cost_on_peak_pence: Number(costOnPeakP.toFixed(2)),
+      total_earnings_export_pence: Number(earningsExportP.toFixed(2)),
+      total_net_pence: Number(netP.toFixed(2)),
     };
+  }
+
+  private recommendStrategy(
+    days: DayForecast[],
+    baseTargetRows: BatteryPlanRow[],
+    config: ForecastConfig,
+    ctx: StrategyPlanContext,
+  ): StrategyRecommendation {
+    const strategies: Strategy[] = ['zero-cost', 'balanced', 'sell-all'];
+    const comparisons = strategies.map((strategy) =>
+      this.summarizeStrategy(strategy, this.runStrategyPlan(strategy, days, baseTargetRows, config, ctx)),
+    );
+
+    // Pick the strategy with the best net financial outcome over the horizon.
+    // Ties fall back to the earlier (more conservative) strategy in the list.
+    const best = comparisons.reduce((winner, candidate) =>
+      candidate.total_net_pence > winner.total_net_pence ? candidate : winner,
+    );
+
+    return {
+      recommended_strategy: best.strategy,
+      recommended_label: best.label,
+      is_current_strategy: best.strategy === config.strategy,
+      horizon_days: days.length,
+      best,
+      comparisons,
+      explanation: this.buildStrategyExplanation(best, comparisons, config),
+    };
+  }
+
+  private buildStrategyExplanation(
+    best: StrategyComparison,
+    comparisons: StrategyComparison[],
+    config: ForecastConfig,
+  ): string {
+    const offPeak = config.off_peak_cost_p_per_kwh;
+    const onPeak = config.on_peak_cost_p_per_kwh;
+    const sellBack = config.sell_back_price_p_per_kwh;
+    const tariffsUnset = offPeak === 0 && onPeak === 0 && sellBack === 0;
+
+    const fmtNet = (value: number): string =>
+      value >= 0
+        ? `earn £${(value / 100).toFixed(2)}`
+        : `spend £${(Math.abs(value) / 100).toFixed(2)}`;
+
+    if (tariffsUnset) {
+      return `No tariff prices are set (off-peak, on-peak and sell-back are all 0p/kWh), so every strategy nets out at £0.00 `
+        + `and the strategies cannot be separated on cost. Enter your off-peak cost, on-peak cost and sell-back price to get a `
+        + `meaningful recommendation. Until then, "${best.label}" is shown as a safe default that minimises grid import.`;
+    }
+
+    const sorted = [...comparisons].sort((a, b) => b.total_net_pence - a.total_net_pence);
+    const runnerUp = sorted.find((entry) => entry.strategy !== best.strategy);
+    const advantageText = runnerUp
+      ? ` That is £${(Math.abs(best.total_net_pence - runnerUp.total_net_pence) / 100).toFixed(2)} better than "${runnerUp.label}" over the same period.`
+      : '';
+
+    let rationale: string;
+    if (best.strategy === 'sell-all') {
+      rationale = `With a sell-back price of ${sellBack.toFixed(2)}p/kWh relative to an on-peak rate of ${onPeak.toFixed(2)}p/kWh, `
+        + `it pays to export all of your solar and cover the house from the grid. The battery is charged off-peak `
+        + `(at ${offPeak.toFixed(2)}p/kWh) rather than from solar.`;
+    } else if (best.strategy === 'balanced') {
+      rationale = `Charging the battery to full off-peak (at ${offPeak.toFixed(2)}p/kWh) and using it to avoid on-peak import `
+        + `(${onPeak.toFixed(2)}p/kWh), while still exporting surplus solar at ${sellBack.toFixed(2)}p/kWh, gives the best balance `
+        + `of low running cost and export income.`;
+    } else {
+      rationale = `Charging only enough off-peak to get through the day and self-consuming your solar minimises expensive `
+        + `on-peak import (${onPeak.toFixed(2)}p/kWh). With sell-back at only ${sellBack.toFixed(2)}p/kWh there is little `
+        + `incentive to export, so keeping energy for your own use wins.`;
+    }
+
+    const gridCost = (best.total_cost_off_peak_pence + best.total_cost_on_peak_pence) / 100;
+    const exportIncome = best.total_earnings_export_pence / 100;
+
+    return `Over the forecast horizon, "${best.label}" gives the best financial outcome: you would ${fmtNet(best.total_net_pence)} `
+      + `(£${exportIncome.toFixed(2)} export income minus £${gridCost.toFixed(2)} grid cost).${advantageText} ${rationale}`;
   }
 }
 
-export type { ForecastConfig, DayForecast, BatteryPlanRow, Strategy };
+export type {
+  ForecastConfig,
+  DayForecast,
+  BatteryPlanRow,
+  Strategy,
+  StrategyComparison,
+  StrategyRecommendation,
+};

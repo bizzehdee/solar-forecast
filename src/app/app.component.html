@@ -103,3 +103,59 @@
     </tbody>
   </table>
 </div>
+
+<div class="card" *ngIf="payload?.strategy_recommendation as rec">
+  <h2>Recommended strategy</h2>
+
+  <div class="recommendation-banner">
+    <div class="recommendation-headline">
+      <span class="recommendation-pill">{{ rec.recommended_label }}</span>
+      <span class="recommendation-net" [class.positive]="rec.best.total_net_pence >= 0" [class.negative]="rec.best.total_net_pence < 0">
+        {{ formatPounds(rec.best.total_net_pence) }}
+      </span>
+      <span class="recommendation-horizon">over {{ rec.horizon_days }} forecast day{{ rec.horizon_days === 1 ? '' : 's' }}</span>
+    </div>
+    <div class="small-note" *ngIf="!rec.is_current_strategy">
+      Your current strategy is set to <strong>{{ config.strategy }}</strong>. Switch to <strong>{{ rec.recommended_strategy }}</strong> to capture the figures below.
+    </div>
+    <div class="small-note" *ngIf="rec.is_current_strategy">
+      This matches your currently selected strategy &mdash; you are already on the best option for your tariff.
+    </div>
+  </div>
+
+  <p class="recommendation-explanation">{{ rec.explanation }}</p>
+
+  <h3>Strategy comparison (forecast totals)</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>Strategy</th>
+        <th>Off-peak import (kWh)</th>
+        <th>On-peak import (kWh)</th>
+        <th>Solar export (kWh)</th>
+        <th>Grid cost (p)</th>
+        <th>Export earnings (p)</th>
+        <th>Net</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr *ngFor="let c of rec.comparisons; trackBy: trackComparison"
+          [class.recommended-row]="c.strategy === rec.recommended_strategy">
+        <td>
+          <strong>{{ c.label }}</strong>
+          <span class="best-tag" *ngIf="c.strategy === rec.recommended_strategy">best</span>
+        </td>
+        <td>{{ c.total_off_peak_import_kwh.toFixed(2) }}</td>
+        <td>{{ c.total_on_peak_import_kwh.toFixed(2) }}</td>
+        <td>{{ c.total_solar_export_kwh.toFixed(2) }}</td>
+        <td>{{ (c.total_cost_off_peak_pence + c.total_cost_on_peak_pence).toFixed(2) }}</td>
+        <td>{{ c.total_earnings_export_pence.toFixed(2) }}</td>
+        <td><strong>{{ formatPounds(c.total_net_pence) }}</strong></td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="small-note">
+    Net = export earnings &minus; (off-peak grid cost + on-peak grid cost), summed across every forecast day using your tariff prices.
+    A positive figure means the system pays you; a negative figure is your net energy bill.
+  </div>
+</div>

@@ -17,6 +17,7 @@ import {
   ForecastConfig,
   ForecastPayload,
   ForecastService,
+  StrategyComparison,
 } from './forecast.service';
 
 interface CachedForecastPayload {
@@ -136,8 +137,17 @@ export class AppComponent implements OnInit, AfterViewInit {
     return row.date;
   }
 
+  trackComparison(_: number, comparison: StrategyComparison): string {
+    return comparison.strategy;
+  }
+
   formatNetPence(value: number): string {
     return value >= 0 ? `+${value.toFixed(2)}` : value.toFixed(2);
+  }
+
+  formatPounds(pence: number): string {
+    const pounds = pence / 100;
+    return pounds >= 0 ? `+£${pounds.toFixed(2)}` : `-£${Math.abs(pounds).toFixed(2)}`;
   }
 
   private saveConfig(config: ForecastConfig): void {
