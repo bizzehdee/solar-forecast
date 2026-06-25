@@ -130,32 +130,37 @@
     <thead>
       <tr>
         <th>Strategy</th>
-        <th>Off-peak import (kWh)</th>
-        <th>On-peak import (kWh)</th>
-        <th>Solar export (kWh)</th>
-        <th>Grid cost (p)</th>
-        <th>Export earnings (p)</th>
+        <th>Off-peak import cost (p)</th>
+        <th>On-peak import cost (p)</th>
+        <th>Solar export earnings (p)</th>
         <th>Net</th>
+        <th>Saving vs no system</th>
       </tr>
     </thead>
     <tbody>
       <tr *ngFor="let c of rec.comparisons; trackBy: trackComparison"
-          [class.recommended-row]="c.strategy === rec.recommended_strategy">
+          [class.recommended-row]="!c.is_baseline && c.strategy === rec.recommended_strategy"
+          [class.baseline-row]="c.is_baseline">
         <td>
           <strong>{{ c.label }}</strong>
-          <span class="best-tag" *ngIf="c.strategy === rec.recommended_strategy">best</span>
+          <span class="best-tag" *ngIf="!c.is_baseline && c.strategy === rec.recommended_strategy">best</span>
+          <span class="shadow-tag" *ngIf="c.is_baseline">reference</span>
         </td>
-        <td>{{ c.total_off_peak_import_kwh.toFixed(2) }}</td>
-        <td>{{ c.total_on_peak_import_kwh.toFixed(2) }}</td>
-        <td>{{ c.total_solar_export_kwh.toFixed(2) }}</td>
-        <td>{{ (c.total_cost_off_peak_pence + c.total_cost_on_peak_pence).toFixed(2) }}</td>
+        <td>{{ c.total_cost_off_peak_pence.toFixed(2) }}</td>
+        <td>{{ c.total_cost_on_peak_pence.toFixed(2) }}</td>
         <td>{{ c.total_earnings_export_pence.toFixed(2) }}</td>
         <td><strong>{{ formatPounds(c.total_net_pence) }}</strong></td>
+        <td>
+          <strong *ngIf="!c.is_baseline">{{ formatPounds(c.savings_vs_baseline_pence) }}</strong>
+          <span *ngIf="c.is_baseline">&mdash;</span>
+        </td>
       </tr>
     </tbody>
   </table>
   <div class="small-note">
     Net = export earnings &minus; (off-peak grid cost + on-peak grid cost), summed across every forecast day using your tariff prices.
     A positive figure means the system pays you; a negative figure is your net energy bill.
+    The <strong>No solar or battery</strong> row is a reference scenario &mdash; all usage bought from the grid, nothing exported &mdash;
+    so the saving column shows what each strategy is worth against owning no system at all.
   </div>
 </div>

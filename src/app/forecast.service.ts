@@ -104,8 +104,9 @@ interface ForecastSummary {
 }
 
 interface StrategyComparison {
-  strategy: Strategy;
+  strategy: Strategy | 'baseline';
   label: string;
+  is_baseline: boolean;
   total_off_peak_import_kwh: number;
   total_on_peak_import_kwh: number;
   total_solar_export_kwh: number;
@@ -113,6 +114,7 @@ interface StrategyComparison {
   total_cost_on_peak_pence: number;
   total_earnings_export_pence: number;
   total_net_pence: number;
+  savings_vs_baseline_pence: number;
 }
 
 interface StrategyRecommendation {
@@ -831,6 +833,7 @@ export class ForecastService {
     return {
       strategy,
       label: this.strategyLabel(strategy),
+      is_baseline: false,
       total_off_peak_import_kwh: Number(offPeakImportKwh.toFixed(3)),
       total_on_peak_import_kwh: Number(onPeakImportKwh.toFixed(3)),
       total_solar_export_kwh: Number(solarExportKwh.toFixed(3)),
@@ -838,6 +841,40 @@ export class ForecastService {
       total_cost_on_peak_pence: Number(costOnPeakP.toFixed(2)),
       total_earnings_export_pence: Number(earningsExportP.toFixed(2)),
       total_net_pence: Number(netP.toFixed(2)),
+      savings_vs_baseline_pence: 0,
+    };
+  }
+
+  /**
+   * Shadow scenario: no solar panels and no battery. Every kWh of household
+   * usage is imported from the grid at the time it occurs — the overnight
+   * portion at the off-peak rate, the rest at the on-peak rate — with no
+   * solar export. This is the "do nothing" baseline the real strategies are
+   * measured against. It is never offered as a selectable strategy.
+   */
+  private buildBaselineComparison(
+    days: DayForecast[],
+    config: ForecastConfig,
+    ctx: StrategyPlanContext,
+  ): StrategyComparison {
+    const horizonDays = days.length;
+    const offPeakImportKwh = (ctx.overnightDrainWh / 1000.0) * horizonDays;
+    const onPeakImportKwh = (ctx.daytimeLoadTotalWh / 1000.0) * horizonDays;
+    const costOffPeakP = offPeakImportKwh * config.off_peak_cost_p_per_kwh;
+    const costOnPeakP = onPeakImportKwh * config.on_peak_cost_p_per_kwh;
+
+    return {
+      strategy: 'baseline',
+      label: 'No solar or battery',
+      is_baseline: true,
+      total_off_peak_import_kwh: Number(offPeakImportKwh.toFixed(3)),
+      total_on_peak_import_kwh: Number(onPeakImportKwh.toFixed(3)),
+      total_solar_export_kwh: 0,
+      total_cost_off_peak_pence: Number(costOffPeakP.toFixed(2)),
+      total_cost_on_peak_pence: Number(costOnPeakP.toFixed(2)),
+      total_earnings_export_pence: 0,
+      total_net_pence: Number((-(costOffPeakP + costOnPeakP)).toFixed(2)),
+      savings_vs_baseline_pence: 0,
     };
   }
 
@@ -848,18 +885,30 @@ export class ForecastService {
     ctx: StrategyPlanContext,
   ): StrategyRecommendation {
     const strategies: Strategy[] = ['zero-cost', 'balanced', 'sell-all'];
-    const comparisons = strategies.map((strategy) =>
+    const strategyComparisons = strategies.map((strategy) =>
       this.summarizeStrategy(strategy, this.runStrategyPlan(strategy, days, baseTargetRows, config, ctx)),
     );
 
     // Pick the strategy with the best net financial outcome over the horizon.
     // Ties fall back to the earlier (more conservative) strategy in the list.
-    const best = comparisons.reduce((winner, candidate) =>
+    // The baseline is a reference only and is never eligible to win.
+    const best = strategyComparisons.reduce((winner, candidate) =>
       candidate.total_net_pence > winner.total_net_pence ? candidate : winner,
     );
 
+    // Append the shadow "no system" row and express every row's saving
+    // relative to it, so the comparison shows what the kit is worth.
+    const baseline = this.buildBaselineComparison(days, config, ctx);
+    const comparisons = [...strategyComparisons, baseline].map((comparison) => ({
+      ...comparison,
+      savings_vs_baseline_pence: comparison.is_baseline
+        ? 0
+        : Number((comparison.total_net_pence - baseline.total_net_pence).toFixed(2)),
+    }));
+    best.savings_vs_baseline_pence = Number((best.total_net_pence - baseline.total_net_pence).toFixed(2));
+
     return {
-      recommended_strategy: best.strategy,
+      recommended_strategy: best.strategy as Strategy,
       recommended_label: best.label,
       is_current_strategy: best.strategy === config.strategy,
       horizon_days: days.length,
@@ -890,10 +939,18 @@ export class ForecastService {
         + `meaningful recommendation. Until then, "${best.label}" is shown as a safe default that minimises grid import.`;
     }
 
-    const sorted = [...comparisons].sort((a, b) => b.total_net_pence - a.total_net_pence);
+    const sorted = [...comparisons]
+      .filter((entry) => !entry.is_baseline)
+      .sort((a, b) => b.total_net_pence - a.total_net_pence);
     const runnerUp = sorted.find((entry) => entry.strategy !== best.strategy);
     const advantageText = runnerUp
       ? ` That is £${(Math.abs(best.total_net_pence - runnerUp.total_net_pence) / 100).toFixed(2)} better than "${runnerUp.label}" over the same period.`
+      : '';
+
+    const baseline = comparisons.find((entry) => entry.is_baseline);
+    const savingsText = baseline
+      ? ` Compared with having no solar or battery at all (a £${(Math.abs(baseline.total_net_pence) / 100).toFixed(2)} grid bill), `
+        + `that saves you £${((best.total_net_pence - baseline.total_net_pence) / 100).toFixed(2)} over the forecast period.`
       : '';
 
     let rationale: string;
@@ -915,7 +972,7 @@ export class ForecastService {
     const exportIncome = best.total_earnings_export_pence / 100;
 
     return `Over the forecast horizon, "${best.label}" gives the best financial outcome: you would ${fmtNet(best.total_net_pence)} `
-      + `(£${exportIncome.toFixed(2)} export income minus £${gridCost.toFixed(2)} grid cost).${advantageText} ${rationale}`;
+      + `(£${exportIncome.toFixed(2)} export income minus £${gridCost.toFixed(2)} grid cost).${advantageText}${savingsText} ${rationale}`;
   }
 }
 
