@@ -26,6 +26,8 @@ interface ForecastConfig {
   on_peak_cost_p_per_kwh: number;
   sell_back_price_p_per_kwh: number;
   timezone: string;
+  temp_coeff_per_c: number;
+  panel_type: string;
 }
 
 interface PanelModelConfig {
@@ -175,6 +177,8 @@ export class ForecastService {
     on_peak_cost_p_per_kwh: 0.0,
     sell_back_price_p_per_kwh: 0.0,
     timezone: 'auto',
+    temp_coeff_per_c: -0.0026,
+    panel_type: 'ABC',
   };
 
   private readonly panelModel: PanelModelConfig = {
@@ -238,6 +242,8 @@ export class ForecastService {
       on_peak_cost_p_per_kwh: this.toNumberOrDefault(rawConfig.on_peak_cost_p_per_kwh, this.defaultConfig.on_peak_cost_p_per_kwh),
       sell_back_price_p_per_kwh: this.toNumberOrDefault(rawConfig.sell_back_price_p_per_kwh, this.defaultConfig.sell_back_price_p_per_kwh),
       timezone: String(rawConfig.timezone ?? this.defaultConfig.timezone),
+      temp_coeff_per_c: this.toNumberOrDefault(rawConfig.temp_coeff_per_c, this.defaultConfig.temp_coeff_per_c),
+      panel_type: typeof rawConfig.panel_type === 'string' ? rawConfig.panel_type : 'custom',
     };
   }
 
@@ -381,7 +387,7 @@ export class ForecastService {
     const moduleTempC = ambientTempC
       + ((this.panelModel.noct_c - 20.0) / 800.0) * Math.max(gtiWm2, 0.0)
       - (this.panelModel.wind_cooling_c_per_m_s * Math.max(windSpeedMs, 0.0));
-    const tempFactor = Math.max(0.0, 1.0 + this.panelModel.temp_coeff_per_c * (moduleTempC - 25.0));
+    const tempFactor = Math.max(0.0, 1.0 + config.temp_coeff_per_c * (moduleTempC - 25.0));
     let lowLightFactor = 1.0;
     if (gtiWm2 > 0.0) {
       lowLightFactor += Math.max(this.panelModel.low_light_gain, 0.0) * Math.max(0.0, 1.0 - irradianceRatio);

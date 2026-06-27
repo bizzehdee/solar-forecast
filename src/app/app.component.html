@@ -9,7 +9,14 @@
       <div><label for="tilt">Tilt (deg)</label><input id="tilt" type="number" [(ngModel)]="config.tilt" /></div>
       <div><label for="azimuth">Azimuth from South (deg)</label><input id="azimuth" type="number" [(ngModel)]="config.azimuth" /></div>
       <div><label for="installed_watts">Installed Watts</label><input id="installed_watts" type="number" [(ngModel)]="config.installed_watts" /></div>
-      <div><label for="performance_ratio">Performance Ratio</label><input id="performance_ratio" type="number" step="0.01" [(ngModel)]="config.performance_ratio" /></div>
+      <div>
+        <label for="panel_type">Panel Type</label>
+        <select id="panel_type" [(ngModel)]="config.panel_type" (ngModelChange)="onPanelTypeChange()">
+          <option *ngFor="let pt of panelTypes" [value]="pt.value">{{ pt.label }}</option>
+        </select>
+      </div>
+      <div><label for="performance_ratio">Performance Ratio</label><input id="performance_ratio" type="number" step="0.01" [(ngModel)]="config.performance_ratio" [readonly]="!isCustomPanel" /></div>
+      <div><label for="temp_coeff_per_c">Temp. Coefficient (%/°C)</label><input id="temp_coeff_per_c" type="number" step="0.0001" [(ngModel)]="config.temp_coeff_per_c" [readonly]="!isCustomPanel" /></div>
       <div><label for="controller_efficiency">Controller Efficiency</label><input id="controller_efficiency" type="number" step="0.01" [(ngModel)]="config.controller_efficiency" /></div>
       <div><label for="controller_max_output_watts">Controller Max Output (opt)</label><input id="controller_max_output_watts" type="number" [(ngModel)]="config.controller_max_output_watts" /></div>
     </div>

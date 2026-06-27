@@ -45,6 +45,16 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
   @ViewChildren('dayCanvas')
   dayCanvases?: QueryList<ElementRef<HTMLCanvasElement>>;
 
+  readonly panelTypes: ReadonlyArray<{ label: string; value: string; temp_coeff_per_c: number | null; performance_ratio: number | null }> = [
+    { label: 'ABC',        value: 'ABC',        temp_coeff_per_c: -0.0026, performance_ratio: 0.94 },
+    { label: 'HJT',        value: 'HJT',        temp_coeff_per_c: -0.0027, performance_ratio: 0.93 },
+    { label: 'TOPCon',     value: 'TOPCon',     temp_coeff_per_c: -0.0032, performance_ratio: 0.90 },
+    { label: 'Mono PERC',  value: 'Mono PERC',  temp_coeff_per_c: -0.0040, performance_ratio: 0.85 },
+    { label: 'Poly',       value: 'Poly',       temp_coeff_per_c: -0.0043, performance_ratio: 0.80 },
+    { label: 'CIGS/Amorph', value: 'CIGS/Amorph', temp_coeff_per_c: -0.0030, performance_ratio: 0.80 },
+    { label: 'Custom',     value: 'custom',     temp_coeff_per_c: null,    performance_ratio: null },
+  ];
+
   config: ForecastConfig;
   payload: ForecastPayload | null = null;
   statusText = '';
@@ -148,6 +158,18 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
 
   get offPeakEndLabel(): string {
     return this.config.off_peak_window_end;
+  }
+
+  get isCustomPanel(): boolean {
+    return this.config.panel_type === 'custom';
+  }
+
+  onPanelTypeChange(): void {
+    const preset = this.panelTypes.find((p) => p.value === this.config.panel_type);
+    if (preset && preset.temp_coeff_per_c !== null && preset.performance_ratio !== null) {
+      this.config.temp_coeff_per_c = preset.temp_coeff_per_c;
+      this.config.performance_ratio = preset.performance_ratio;
+    }
   }
 
   trackDay(_: number, day: DayForecast): string {
