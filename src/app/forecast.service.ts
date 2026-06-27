@@ -4,13 +4,20 @@ import { firstValueFrom } from 'rxjs';
 
 type Strategy = 'sell-all' | 'balanced' | 'zero-cost';
 
-interface ForecastConfig {
-  latitude: number;
-  longitude: number;
+interface SolarArray {
+  label: string;
   tilt: number;
   azimuth: number;
   installed_watts: number;
   performance_ratio: number;
+  temp_coeff_per_c: number;
+  panel_type: string;
+}
+
+interface ForecastConfig {
+  latitude: number;
+  longitude: number;
+  arrays: SolarArray[];
   controller_efficiency: number;
   controller_max_output_watts: number | null;
   battery_capacity_kwh: number;
@@ -26,12 +33,9 @@ interface ForecastConfig {
   on_peak_cost_p_per_kwh: number;
   sell_back_price_p_per_kwh: number;
   timezone: string;
-  temp_coeff_per_c: number;
-  panel_type: string;
 }
 
 interface PanelModelConfig {
-  temp_coeff_per_c: number;
   noct_c: number;
   low_light_gain: number;
   wind_cooling_c_per_m_s: number;
@@ -45,6 +49,22 @@ interface OpenMeteoResponse {
     wind_speed_10m?: Array<number | null>;
     cloud_cover?: Array<number | null>;
   };
+}
+
+interface WeatherBuildData {
+  time: string[];
+  temperature_2m: Array<number | null>;
+  wind_speed_10m: Array<number | null>;
+  cloud_cover: Array<number | null>;
+  gti_by_array: Array<Array<number | null>>;
+}
+
+interface StoredWeatherData {
+  time: string[];
+  temperature_2m: number[];
+  wind_speed_10m: number[];
+  cloud_cover: number[];
+  gti_by_array: number[][];
 }
 
 interface DayForecast {
@@ -146,6 +166,7 @@ export interface ForecastPayload {
   battery_plan: BatteryPlanRow[];
   battery_assumptions: BatteryAssumptions;
   strategy_recommendation: StrategyRecommendation | null;
+  weather_data?: StoredWeatherData;
 }
 
 @Injectable({
@@ -155,13 +176,30 @@ export class ForecastService {
   private readonly forecastDays = 16;
   private readonly openMeteoUrl = 'https://api.open-meteo.com/v1/forecast';
 
-  readonly defaultConfig: ForecastConfig = {
-    latitude: 51.5074,
-    longitude: -0.1278,
+  readonly defaultArray: SolarArray = {
+    label: '',
     tilt: 35.0,
     azimuth: 0.0,
     installed_watts: 5000.0,
-    performance_ratio: 0.85,
+    performance_ratio: 0.94,
+    temp_coeff_per_c: -0.0026,
+    panel_type: 'ABC',
+  };
+
+  readonly defaultConfig: ForecastConfig = {
+    latitude: 51.5074,
+    longitude: -0.1278,
+    arrays: [
+      {
+        label: '',
+        tilt: 35.0,
+        azimuth: 0.0,
+        installed_watts: 5000.0,
+        performance_ratio: 0.94,
+        temp_coeff_per_c: -0.0026,
+        panel_type: 'ABC',
+      },
+    ],
     controller_efficiency: 0.98,
     controller_max_output_watts: null,
     battery_capacity_kwh: 16.0,
@@ -177,12 +215,9 @@ export class ForecastService {
     on_peak_cost_p_per_kwh: 0.0,
     sell_back_price_p_per_kwh: 0.0,
     timezone: 'auto',
-    temp_coeff_per_c: -0.0026,
-    panel_type: 'ABC',
   };
 
   private readonly panelModel: PanelModelConfig = {
-    temp_coeff_per_c: -0.0026,
     noct_c: 44.0,
     low_light_gain: 0.04,
     wind_cooling_c_per_m_s: 0.6,
@@ -194,132 +229,207 @@ export class ForecastService {
     return structuredClone(this.defaultConfig);
   }
 
-  normalizeConfig(rawConfig: Partial<Record<keyof ForecastConfig, unknown>>): ForecastConfig {
-    const strategyInput = String(rawConfig.strategy ?? this.defaultConfig.strategy).trim().toLowerCase();
+  getDefaultArray(): SolarArray {
+    return structuredClone(this.defaultArray);
+  }
+
+  normalizeConfig(rawConfig: Record<string, unknown>): ForecastConfig {
+    const strategyInput = String(rawConfig['strategy'] ?? this.defaultConfig.strategy).trim().toLowerCase();
     const strategy: Strategy = ['sell-all', 'balanced', 'zero-cost'].includes(strategyInput)
       ? (strategyInput as Strategy)
       : this.defaultConfig.strategy;
 
+    let arrays: SolarArray[];
+    const rawArrays = rawConfig['arrays'];
+    if (Array.isArray(rawArrays) && rawArrays.length > 0) {
+      arrays = rawArrays.map((item, index) =>
+        this.normalizeSolarArray(
+          item && typeof item === 'object' ? (item as Record<string, unknown>) : {},
+          index,
+        ),
+      );
+    } else {
+      // Migrate legacy flat-field format
+      arrays = [
+        this.normalizeSolarArray(
+          {
+            label: '',
+            tilt: rawConfig['tilt'],
+            azimuth: rawConfig['azimuth'],
+            installed_watts: rawConfig['installed_watts'],
+            performance_ratio: rawConfig['performance_ratio'],
+            temp_coeff_per_c: rawConfig['temp_coeff_per_c'],
+            panel_type: rawConfig['panel_type'],
+          },
+          0,
+        ),
+      ];
+    }
+
     return {
-      latitude: this.toNumberOrDefault(rawConfig.latitude, this.defaultConfig.latitude),
-      longitude: this.toNumberOrDefault(rawConfig.longitude, this.defaultConfig.longitude),
-      tilt: this.toNumberOrDefault(rawConfig.tilt, this.defaultConfig.tilt),
-      azimuth: this.toNumberOrDefault(rawConfig.azimuth, this.defaultConfig.azimuth),
-      installed_watts: this.toNumberOrDefault(rawConfig.installed_watts, this.defaultConfig.installed_watts),
-      performance_ratio: this.toNumberOrDefault(rawConfig.performance_ratio, this.defaultConfig.performance_ratio),
-      controller_efficiency: this.toNumberOrDefault(rawConfig.controller_efficiency, this.defaultConfig.controller_efficiency),
+      latitude: this.toNumberOrDefault(rawConfig['latitude'], this.defaultConfig.latitude),
+      longitude: this.toNumberOrDefault(rawConfig['longitude'], this.defaultConfig.longitude),
+      arrays,
+      controller_efficiency: this.toNumberOrDefault(rawConfig['controller_efficiency'], this.defaultConfig.controller_efficiency),
       controller_max_output_watts: this.toOptionalNumber(
-        rawConfig.controller_max_output_watts,
+        rawConfig['controller_max_output_watts'],
         this.defaultConfig.controller_max_output_watts,
       ),
-      battery_capacity_kwh: this.toNumberOrDefault(rawConfig.battery_capacity_kwh, this.defaultConfig.battery_capacity_kwh),
-      assumed_daily_usage_kwh: this.toNumberOrDefault(rawConfig.assumed_daily_usage_kwh, this.defaultConfig.assumed_daily_usage_kwh),
+      battery_capacity_kwh: this.toNumberOrDefault(rawConfig['battery_capacity_kwh'], this.defaultConfig.battery_capacity_kwh),
+      assumed_daily_usage_kwh: this.toNumberOrDefault(rawConfig['assumed_daily_usage_kwh'], this.defaultConfig.assumed_daily_usage_kwh),
       reserve_percent_floor: this.toBoundedNumber(
-        rawConfig.reserve_percent_floor,
+        rawConfig['reserve_percent_floor'],
         this.defaultConfig.reserve_percent_floor,
         0.0,
         100.0,
       ),
       night_load_kwh_per_hour: this.toBoundedNumber(
-        rawConfig.night_load_kwh_per_hour,
+        rawConfig['night_load_kwh_per_hour'],
         this.defaultConfig.night_load_kwh_per_hour,
         0.0,
       ),
       soc_rounding_step_percent: this.toBoundedNumber(
-        rawConfig.soc_rounding_step_percent,
+        rawConfig['soc_rounding_step_percent'],
         this.defaultConfig.soc_rounding_step_percent,
         0.1,
         100.0,
       ),
       current_soc_at_0600_percent: this.toOptionalNumber(
-        rawConfig.current_soc_at_0600_percent,
+        rawConfig['current_soc_at_0600_percent'],
         this.defaultConfig.current_soc_at_0600_percent,
       ),
       strategy,
-      off_peak_cost_p_per_kwh: this.toNumberOrDefault(rawConfig.off_peak_cost_p_per_kwh, this.defaultConfig.off_peak_cost_p_per_kwh),
-      off_peak_window_start: this.normalizeTimeValue(rawConfig.off_peak_window_start, this.defaultConfig.off_peak_window_start),
-      off_peak_window_end: this.normalizeTimeValue(rawConfig.off_peak_window_end, this.defaultConfig.off_peak_window_end),
-      on_peak_cost_p_per_kwh: this.toNumberOrDefault(rawConfig.on_peak_cost_p_per_kwh, this.defaultConfig.on_peak_cost_p_per_kwh),
-      sell_back_price_p_per_kwh: this.toNumberOrDefault(rawConfig.sell_back_price_p_per_kwh, this.defaultConfig.sell_back_price_p_per_kwh),
-      timezone: String(rawConfig.timezone ?? this.defaultConfig.timezone),
-      temp_coeff_per_c: this.toNumberOrDefault(rawConfig.temp_coeff_per_c, this.defaultConfig.temp_coeff_per_c),
-      panel_type: typeof rawConfig.panel_type === 'string' ? rawConfig.panel_type : 'custom',
+      off_peak_cost_p_per_kwh: this.toNumberOrDefault(rawConfig['off_peak_cost_p_per_kwh'], this.defaultConfig.off_peak_cost_p_per_kwh),
+      off_peak_window_start: this.normalizeTimeValue(rawConfig['off_peak_window_start'], this.defaultConfig.off_peak_window_start),
+      off_peak_window_end: this.normalizeTimeValue(rawConfig['off_peak_window_end'], this.defaultConfig.off_peak_window_end),
+      on_peak_cost_p_per_kwh: this.toNumberOrDefault(rawConfig['on_peak_cost_p_per_kwh'], this.defaultConfig.on_peak_cost_p_per_kwh),
+      sell_back_price_p_per_kwh: this.toNumberOrDefault(rawConfig['sell_back_price_p_per_kwh'], this.defaultConfig.sell_back_price_p_per_kwh),
+      timezone: String(rawConfig['timezone'] ?? this.defaultConfig.timezone),
     };
   }
 
   async buildForecastPayload(config: ForecastConfig): Promise<ForecastPayload> {
-    const normalizedConfig = this.normalizeConfig(config);
-    const data = await this.fetchOpenMeteo(normalizedConfig);
-    return this.buildPayload(normalizedConfig, data);
+    const normalizedConfig = this.normalizeConfig(config as unknown as Record<string, unknown>);
+    const responses = await Promise.all(
+      normalizedConfig.arrays.map((array) => this.fetchOpenMeteoForArray(normalizedConfig, array)),
+    );
+    const weatherData = this.mergeArrayResponses(responses);
+    return this.buildPayload(normalizedConfig, weatherData);
   }
 
   rebuildForecastPayload(config: ForecastConfig, cachedPayload: ForecastPayload): ForecastPayload {
-    const normalizedConfig = this.normalizeConfig(config);
-    const weatherCompatibleConfig = {
-      ...normalizedConfig,
-      installed_watts: cachedPayload.config.installed_watts,
-      performance_ratio: cachedPayload.config.performance_ratio,
-      controller_efficiency: cachedPayload.config.controller_efficiency,
-      controller_max_output_watts: cachedPayload.config.controller_max_output_watts,
-    };
+    const normalizedConfig = this.normalizeConfig(config as unknown as Record<string, unknown>);
 
-    const weatherData = this.extractOpenMeteoResponse(cachedPayload);
-    return this.buildPayload(weatherCompatibleConfig, weatherData);
+    if (cachedPayload.weather_data) {
+      return this.buildPayload(normalizedConfig, {
+        time: cachedPayload.weather_data.time,
+        temperature_2m: cachedPayload.weather_data.temperature_2m,
+        wind_speed_10m: cachedPayload.weather_data.wind_speed_10m,
+        cloud_cover: cachedPayload.weather_data.cloud_cover,
+        gti_by_array: cachedPayload.weather_data.gti_by_array,
+      });
+    }
+
+    // Legacy fallback: old cache has no weather_data; reconstruct single-array GTI
+    const cachedConfig = this.normalizeConfig(cachedPayload.config as unknown as Record<string, unknown>);
+    const legacyWeather = this.extractLegacyWeatherData(cachedPayload, cachedConfig);
+    return this.buildPayload(normalizedConfig, legacyWeather);
   }
 
   isCacheReusableForConfig(cachedConfig: ForecastConfig, requestedConfig: ForecastConfig): boolean {
-    const cached = this.normalizeConfig(cachedConfig);
-    const requested = this.normalizeConfig(requestedConfig);
+    const cached = this.normalizeConfig(cachedConfig as unknown as Record<string, unknown>);
+    const requested = this.normalizeConfig(requestedConfig as unknown as Record<string, unknown>);
 
-    return cached.latitude === requested.latitude
-      && cached.longitude === requested.longitude
-      && cached.tilt === requested.tilt
-      && cached.azimuth === requested.azimuth
-      && cached.installed_watts === requested.installed_watts
-      && cached.performance_ratio === requested.performance_ratio
-      && cached.controller_efficiency === requested.controller_efficiency
-      && cached.controller_max_output_watts === requested.controller_max_output_watts
-      && cached.timezone === requested.timezone;
+    if (cached.latitude !== requested.latitude || cached.longitude !== requested.longitude) return false;
+    if (cached.timezone !== requested.timezone) return false;
+    if (cached.arrays.length !== requested.arrays.length) return false;
+
+    for (let i = 0; i < cached.arrays.length; i += 1) {
+      if (cached.arrays[i].tilt !== requested.arrays[i].tilt) return false;
+      if (cached.arrays[i].azimuth !== requested.arrays[i].azimuth) return false;
+    }
+
+    return true;
   }
 
-  private extractOpenMeteoResponse(payload: ForecastPayload): OpenMeteoResponse {
+  private normalizeSolarArray(raw: Record<string, unknown>, index: number): SolarArray {
+    const def = this.defaultArray;
+    const panelType = typeof raw['panel_type'] === 'string' ? raw['panel_type'] : 'custom';
+    return {
+      label: typeof raw['label'] === 'string' ? raw['label'] : '',
+      tilt: this.toNumberOrDefault(raw['tilt'], def.tilt),
+      azimuth: this.toNumberOrDefault(raw['azimuth'], def.azimuth),
+      installed_watts: this.toNumberOrDefault(raw['installed_watts'], def.installed_watts),
+      performance_ratio: this.toNumberOrDefault(raw['performance_ratio'], def.performance_ratio),
+      temp_coeff_per_c: this.toNumberOrDefault(raw['temp_coeff_per_c'], def.temp_coeff_per_c),
+      panel_type: panelType,
+    };
+    void index;
+  }
+
+  private fetchOpenMeteoForArray(config: ForecastConfig, array: SolarArray): Promise<OpenMeteoResponse> {
+    const params = new URLSearchParams({
+      latitude: String(config.latitude),
+      longitude: String(config.longitude),
+      hourly: 'global_tilted_irradiance,temperature_2m,wind_speed_10m,cloud_cover',
+      tilt: String(array.tilt),
+      azimuth: String(array.azimuth),
+      wind_speed_unit: 'ms',
+      timezone: config.timezone,
+      forecast_days: String(this.forecastDays),
+    });
+    return firstValueFrom(this.http.get<OpenMeteoResponse>(`${this.openMeteoUrl}?${params.toString()}`));
+  }
+
+  private mergeArrayResponses(responses: OpenMeteoResponse[]): WeatherBuildData {
+    const first = responses[0]?.hourly ?? {};
+    return {
+      time: (first.time ?? []) as string[],
+      temperature_2m: first.temperature_2m ?? [],
+      wind_speed_10m: first.wind_speed_10m ?? [],
+      cloud_cover: first.cloud_cover ?? [],
+      gti_by_array: responses.map((r) => r.hourly?.global_tilted_irradiance ?? []),
+    };
+  }
+
+  private extractLegacyWeatherData(payload: ForecastPayload, cachedConfig: ForecastConfig): WeatherBuildData {
     const time: string[] = [];
-    const global_tilted_irradiance: number[] = [];
     const temperature_2m: number[] = [];
     const wind_speed_10m: number[] = [];
     const cloud_cover: number[] = [];
-    const config = this.normalizeConfig(payload.config);
+    const gti: number[] = [];
+
+    const firstArray = cachedConfig.arrays[0];
+    const scaleFactor = (firstArray?.installed_watts ?? 1) * (firstArray?.performance_ratio ?? 1);
 
     for (const day of payload.days) {
       for (let index = 0; index < day.times.length; index += 1) {
-        const controllerOutputW = day.controller_output_power_w[index] ?? 0.0;
         const pvDcPowerW = day.pv_dc_power_w[index] ?? 0.0;
-        const cloudCoverPercent = day.cloud_cover_percent[index] ?? 0.0;
-        const irradianceRatio = config.installed_watts > 0 && config.performance_ratio > 0
-          ? pvDcPowerW / (config.installed_watts * config.performance_ratio)
-          : 0.0;
+        const controllerOutputW = day.controller_output_power_w[index] ?? 0.0;
+
+        let gtiValue: number;
+        if (pvDcPowerW > 0 && scaleFactor > 0) {
+          gtiValue = (pvDcPowerW / scaleFactor) * 1000.0;
+        } else if (
+          controllerOutputW > 0
+          && cachedConfig.controller_efficiency > 0
+          && cachedConfig.controller_max_output_watts === null
+          && scaleFactor > 0
+        ) {
+          gtiValue = ((controllerOutputW / cachedConfig.controller_efficiency) / scaleFactor) * 1000.0;
+        } else {
+          gtiValue = 0.0;
+        }
 
         time.push(`${day.date}T${day.times[index]}`);
-        global_tilted_irradiance.push(Number(Math.max(0.0, irradianceRatio * 1000.0).toFixed(3)));
+        gti.push(Number(Math.max(0.0, gtiValue).toFixed(3)));
         temperature_2m.push(20.0);
         wind_speed_10m.push(0.0);
-        cloud_cover.push(Number(cloudCoverPercent.toFixed(2)));
-
-        if (config.controller_efficiency > 0 && config.controller_max_output_watts === null && controllerOutputW > 0 && pvDcPowerW <= 0) {
-          global_tilted_irradiance[global_tilted_irradiance.length - 1] = Number(((controllerOutputW / config.controller_efficiency) / Math.max(config.installed_watts * config.performance_ratio, 1) * 1000.0).toFixed(3));
-        }
+        cloud_cover.push(day.cloud_cover_percent[index] ?? 0.0);
       }
     }
 
-    return {
-      hourly: {
-        time,
-        global_tilted_irradiance,
-        temperature_2m,
-        wind_speed_10m,
-        cloud_cover,
-      },
-    };
+    return { time, temperature_2m, wind_speed_10m, cloud_cover, gti_by_array: [gti] };
   }
 
   private toNumberOrDefault(value: unknown, fallback: number): number {
@@ -368,32 +478,18 @@ export class ForecastService {
     return raw > 0 ? raw : raw + 24;
   }
 
-  private async fetchOpenMeteo(config: ForecastConfig): Promise<OpenMeteoResponse> {
-    const params = new URLSearchParams({
-      latitude: String(config.latitude),
-      longitude: String(config.longitude),
-      hourly: 'global_tilted_irradiance,temperature_2m,wind_speed_10m,cloud_cover',
-      tilt: String(config.tilt),
-      azimuth: String(config.azimuth),
-      wind_speed_unit: 'ms',
-      timezone: config.timezone,
-      forecast_days: String(this.forecastDays),
-    });
-    return firstValueFrom(this.http.get<OpenMeteoResponse>(`${this.openMeteoUrl}?${params.toString()}`));
-  }
-
-  private estimateAbcPowerW(gtiWm2: number, ambientTempC: number, windSpeedMs: number, config: ForecastConfig): number {
+  private estimateArrayPowerW(gtiWm2: number, ambientTempC: number, windSpeedMs: number, array: SolarArray): number {
     const irradianceRatio = Math.max(gtiWm2, 0.0) / 1000.0;
     const moduleTempC = ambientTempC
       + ((this.panelModel.noct_c - 20.0) / 800.0) * Math.max(gtiWm2, 0.0)
       - (this.panelModel.wind_cooling_c_per_m_s * Math.max(windSpeedMs, 0.0));
-    const tempFactor = Math.max(0.0, 1.0 + config.temp_coeff_per_c * (moduleTempC - 25.0));
+    const tempFactor = Math.max(0.0, 1.0 + array.temp_coeff_per_c * (moduleTempC - 25.0));
     let lowLightFactor = 1.0;
     if (gtiWm2 > 0.0) {
       lowLightFactor += Math.max(this.panelModel.low_light_gain, 0.0) * Math.max(0.0, 1.0 - irradianceRatio);
     }
     return Math.max(
-      config.installed_watts * irradianceRatio * config.performance_ratio * tempFactor * lowLightFactor,
+      array.installed_watts * irradianceRatio * array.performance_ratio * tempFactor * lowLightFactor,
       0.0,
     );
   }
@@ -537,13 +633,11 @@ export class ForecastService {
     };
   }
 
-  private buildPayload(config: ForecastConfig, data: OpenMeteoResponse): ForecastPayload {
-    const hourly = data.hourly ?? {};
-    const times = hourly.time ?? [];
-    const irradiance = hourly.global_tilted_irradiance ?? [];
-    const ambientTemps = hourly.temperature_2m ?? [];
-    const windSpeeds = hourly.wind_speed_10m ?? [];
-    const cloudCover = hourly.cloud_cover ?? [];
+  private buildPayload(config: ForecastConfig, weather: WeatherBuildData): ForecastPayload {
+    const times = weather.time;
+    const ambientTemps = weather.temperature_2m;
+    const windSpeeds = weather.wind_speed_10m;
+    const cloudCover = weather.cloud_cover;
 
     const daily: Record<string, DayForecast> = {};
     let forecastTotalPv = 0.0;
@@ -551,12 +645,17 @@ export class ForecastService {
 
     for (let i = 0; i < times.length; i += 1) {
       const timestamp = times[i];
-      const gtiValue = Number.isFinite(Number(irradiance[i])) ? Number(irradiance[i]) : 0.0;
       const ambientTemp = Number.isFinite(Number(ambientTemps[i])) ? Number(ambientTemps[i]) : 20.0;
       const windSpeed = Number.isFinite(Number(windSpeeds[i])) ? Number(windSpeeds[i]) : 0.0;
       const cloud = Number.isFinite(Number(cloudCover[i])) ? Number(cloudCover[i]) : 0.0;
 
-      const pvDcPowerW = this.estimateAbcPowerW(gtiValue, ambientTemp, windSpeed, config);
+      let pvDcPowerW = 0.0;
+      for (let a = 0; a < config.arrays.length; a += 1) {
+        const gtiRaw = weather.gti_by_array[a]?.[i];
+        const gtiValue = Number.isFinite(Number(gtiRaw)) ? Number(gtiRaw) : 0.0;
+        pvDcPowerW += this.estimateArrayPowerW(gtiValue, ambientTemp, windSpeed, config.arrays[a]);
+      }
+
       let controllerOutputW = pvDcPowerW * config.controller_efficiency;
       if (config.controller_max_output_watts !== null && controllerOutputW > config.controller_max_output_watts) {
         controllerOutputW = config.controller_max_output_watts;
@@ -660,6 +759,16 @@ export class ForecastService {
       ? this.recommendStrategy(days, baseTargetRows, config, planContext)
       : null;
 
+    const storedWeatherData: StoredWeatherData = {
+      time: times.map((t) => String(t)),
+      temperature_2m: weather.temperature_2m.map((v) => (Number.isFinite(Number(v)) ? Number(v) : 20.0)),
+      wind_speed_10m: weather.wind_speed_10m.map((v) => (Number.isFinite(Number(v)) ? Number(v) : 0.0)),
+      cloud_cover: weather.cloud_cover.map((v) => (Number.isFinite(Number(v)) ? Number(v) : 0.0)),
+      gti_by_array: weather.gti_by_array.map((arr) =>
+        arr.map((v) => (Number.isFinite(Number(v)) ? Number(v) : 0.0)),
+      ),
+    };
+
     return {
       config,
       days,
@@ -687,6 +796,7 @@ export class ForecastService {
         planning_window: `${offPeakWindowEnd}-${String(planningWindowEndHour).padStart(2, '0')}:00`,
       },
       strategy_recommendation: strategyRecommendation,
+      weather_data: storedWeatherData,
     };
   }
 
@@ -895,15 +1005,10 @@ export class ForecastService {
       this.summarizeStrategy(strategy, this.runStrategyPlan(strategy, days, baseTargetRows, config, ctx)),
     );
 
-    // Pick the strategy with the best net financial outcome over the horizon.
-    // Ties fall back to the earlier (more conservative) strategy in the list.
-    // The baseline is a reference only and is never eligible to win.
     const best = strategyComparisons.reduce((winner, candidate) =>
       candidate.total_net_pence > winner.total_net_pence ? candidate : winner,
     );
 
-    // Append the shadow "no system" row and express every row's saving
-    // relative to it, so the comparison shows what the kit is worth.
     const baseline = this.buildBaselineComparison(days, config, ctx);
     const comparisons = [...strategyComparisons, baseline].map((comparison) => ({
       ...comparison,
@@ -984,6 +1089,7 @@ export class ForecastService {
 
 export type {
   ForecastConfig,
+  SolarArray,
   DayForecast,
   BatteryPlanRow,
   Strategy,

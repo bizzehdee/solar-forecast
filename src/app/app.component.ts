@@ -18,6 +18,7 @@ import {
   ForecastConfig,
   ForecastPayload,
   ForecastService,
+  SolarArray,
   StrategyComparison,
 } from './forecast.service';
 
@@ -58,6 +59,7 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
   config: ForecastConfig;
   payload: ForecastPayload | null = null;
   statusText = '';
+  activeArrayIndex = 0;
 
   todayForecastKwh = 0;
   todayGeneratedKwh = 0;
@@ -103,7 +105,7 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
 
   async refresh(): Promise<void> {
     this.saveConfig(this.config);
-    this.config = this.forecastService.normalizeConfig(this.config);
+    this.config = this.forecastService.normalizeConfig(this.config as unknown as Record<string, unknown>);
 
     const cachedForecast = this.loadCachedPayload(this.config);
     if (cachedForecast) {
@@ -160,16 +162,39 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
     return this.config.off_peak_window_end;
   }
 
-  get isCustomPanel(): boolean {
-    return this.config.panel_type === 'custom';
+  isCustomPanelAt(index: number): boolean {
+    return this.config.arrays[index]?.panel_type === 'custom';
   }
 
-  onPanelTypeChange(): void {
-    const preset = this.panelTypes.find((p) => p.value === this.config.panel_type);
+  onPanelTypeChange(index: number): void {
+    const array = this.config.arrays[index];
+    if (!array) return;
+    const preset = this.panelTypes.find((p) => p.value === array.panel_type);
     if (preset && preset.temp_coeff_per_c !== null && preset.performance_ratio !== null) {
-      this.config.temp_coeff_per_c = preset.temp_coeff_per_c;
-      this.config.performance_ratio = preset.performance_ratio;
+      array.temp_coeff_per_c = preset.temp_coeff_per_c;
+      array.performance_ratio = preset.performance_ratio;
     }
+  }
+
+  addArray(): void {
+    const last = this.config.arrays[this.config.arrays.length - 1];
+    const clone: SolarArray = structuredClone(last ?? this.forecastService.getDefaultArray());
+    clone.label = '';
+    this.config.arrays.push(clone);
+    this.activeArrayIndex = this.config.arrays.length - 1;
+  }
+
+  removeArray(index: number): void {
+    if (this.config.arrays.length > 1) {
+      this.config.arrays.splice(index, 1);
+      if (this.activeArrayIndex >= this.config.arrays.length) {
+        this.activeArrayIndex = this.config.arrays.length - 1;
+      }
+    }
+  }
+
+  trackArray(index: number): number {
+    return index;
   }
 
   trackDay(_: number, day: DayForecast): string {
@@ -201,7 +226,7 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
     }
   }
 
-  private loadSavedConfig(): Partial<Record<keyof ForecastConfig, unknown>> | null {
+  private loadSavedConfig(): Record<string, unknown> | null {
     try {
       const raw = localStorage.getItem(this.storageKey);
       if (!raw) {
@@ -209,7 +234,7 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
       }
       const parsed = JSON.parse(raw) as unknown;
       if (parsed && typeof parsed === 'object') {
-        return parsed as Partial<Record<keyof ForecastConfig, unknown>>;
+        return parsed as Record<string, unknown>;
       }
       return null;
     } catch {

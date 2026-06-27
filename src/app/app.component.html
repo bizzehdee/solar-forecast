@@ -6,20 +6,45 @@
     <div class="grid">
       <div><label for="latitude">Latitude</label><input id="latitude" type="number" [(ngModel)]="config.latitude" /></div>
       <div><label for="longitude">Longitude</label><input id="longitude" type="number" [(ngModel)]="config.longitude" /></div>
-      <div><label for="tilt">Tilt (deg)</label><input id="tilt" type="number" [(ngModel)]="config.tilt" /></div>
-      <div><label for="azimuth">Azimuth from South (deg)</label><input id="azimuth" type="number" [(ngModel)]="config.azimuth" /></div>
-      <div><label for="installed_watts">Installed Watts</label><input id="installed_watts" type="number" [(ngModel)]="config.installed_watts" /></div>
-      <div>
-        <label for="panel_type">Panel Type</label>
-        <select id="panel_type" [(ngModel)]="config.panel_type" (ngModelChange)="onPanelTypeChange()">
-          <option *ngFor="let pt of panelTypes" [value]="pt.value">{{ pt.label }}</option>
-        </select>
-      </div>
-      <div><label for="performance_ratio">Performance Ratio</label><input id="performance_ratio" type="number" step="0.01" [(ngModel)]="config.performance_ratio" [readonly]="!isCustomPanel" /></div>
-      <div><label for="temp_coeff_per_c">Temp. Coefficient (%/°C)</label><input id="temp_coeff_per_c" type="number" step="0.0001" [(ngModel)]="config.temp_coeff_per_c" [readonly]="!isCustomPanel" /></div>
       <div><label for="controller_efficiency">Controller Efficiency</label><input id="controller_efficiency" type="number" step="0.01" [(ngModel)]="config.controller_efficiency" /></div>
       <div><label for="controller_max_output_watts">Controller Max Output (opt)</label><input id="controller_max_output_watts" type="number" [(ngModel)]="config.controller_max_output_watts" /></div>
     </div>
+
+    <div class="array-tabs">
+      <button
+        *ngFor="let array of config.arrays; let i = index; trackBy: trackArray"
+        type="button"
+        class="array-tab"
+        [class.active]="i === activeArrayIndex"
+        (click)="activeArrayIndex = i"
+      >
+        {{ array.label || ('Array ' + (i + 1)) }}
+        <span
+          *ngIf="config.arrays.length > 1"
+          class="array-tab-close"
+          (click)="$event.stopPropagation(); removeArray(i)"
+          title="Remove array"
+        >×</span>
+      </button>
+      <button type="button" class="array-tab array-tab-add" (click)="addArray()" title="Add array">+</button>
+    </div>
+
+    <ng-container *ngIf="config.arrays[activeArrayIndex] as array">
+      <div class="grid array-panel">
+        <div><label [for]="'array_' + activeArrayIndex + '_label'">Label (optional)</label><input [id]="'array_' + activeArrayIndex + '_label'" type="text" [(ngModel)]="array.label" /></div>
+        <div><label [for]="'array_' + activeArrayIndex + '_tilt'">Tilt (deg)</label><input [id]="'array_' + activeArrayIndex + '_tilt'" type="number" [(ngModel)]="array.tilt" /></div>
+        <div><label [for]="'array_' + activeArrayIndex + '_azimuth'">Azimuth from South (deg)</label><input [id]="'array_' + activeArrayIndex + '_azimuth'" type="number" [(ngModel)]="array.azimuth" /></div>
+        <div><label [for]="'array_' + activeArrayIndex + '_watts'">Installed Watts</label><input [id]="'array_' + activeArrayIndex + '_watts'" type="number" [(ngModel)]="array.installed_watts" /></div>
+        <div>
+          <label [for]="'array_' + activeArrayIndex + '_panel_type'">Panel Type</label>
+          <select [id]="'array_' + activeArrayIndex + '_panel_type'" [(ngModel)]="array.panel_type" (ngModelChange)="onPanelTypeChange(activeArrayIndex)">
+            <option *ngFor="let pt of panelTypes" [value]="pt.value">{{ pt.label }}</option>
+          </select>
+        </div>
+        <div><label [for]="'array_' + activeArrayIndex + '_perf_ratio'">Performance Ratio</label><input [id]="'array_' + activeArrayIndex + '_perf_ratio'" type="number" step="0.01" [(ngModel)]="array.performance_ratio" [readonly]="!isCustomPanelAt(activeArrayIndex)" /></div>
+        <div><label [for]="'array_' + activeArrayIndex + '_temp_coeff'">Temp. Coefficient (%/°C)</label><input [id]="'array_' + activeArrayIndex + '_temp_coeff'" type="number" step="0.0001" [(ngModel)]="array.temp_coeff_per_c" [readonly]="!isCustomPanelAt(activeArrayIndex)" /></div>
+      </div>
+    </ng-container>
   </div>
 
   <div class="card settings-card" *ngIf="hasBattery">

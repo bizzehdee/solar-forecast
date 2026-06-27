@@ -80,6 +80,67 @@ button {
   color: #cbd5e1;
 }
 
+.array-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin-top: 14px;
+  border-bottom: 1px solid #1e2d40;
+  padding-bottom: 0;
+}
+
+.array-tab {
+  margin-top: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 6px 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: color 0.15s;
+}
+
+.array-tab:hover {
+  color: #cbd5e1;
+}
+
+.array-tab.active {
+  background: #1e2d40;
+  border-color: #334155;
+  color: #facc15;
+}
+
+.array-tab-add {
+  color: #475569;
+  font-size: 16px;
+  padding: 4px 10px;
+}
+
+.array-tab-add:hover {
+  color: #facc15;
+}
+
+.array-tab-close {
+  font-size: 14px;
+  line-height: 1;
+  color: #475569;
+  margin-left: 2px;
+}
+
+.array-tab-close:hover {
+  color: #ef4444;
+}
+
+.array-panel {
+  margin-top: 14px;
+}
+
 .solar-progress {
   display: flex;
   align-items: center;
