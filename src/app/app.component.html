@@ -106,8 +106,11 @@
 <div class="card" *ngIf="payload as p">
   <h2>Per-day hourly charts</h2>
   <div class="day-grid">
-    <div class="card" *ngFor="let day of p.days; trackBy: trackDay">
-      <h3>{{ day.date }} (total: {{ (day.controller_output_power_w_total / 1000).toFixed(3) }} kWh)</h3>
+    <div class="card day-card" *ngFor="let day of p.days; trackBy: trackDay">
+      <div class="day-card-header">
+        <h3>{{ day.date }} (total: {{ (day.controller_output_power_w_total / 1000).toFixed(3) }} kWh)</h3>
+        <button type="button" class="btn-maximise" title="Maximise chart" (click)="openModal(day)">&#x26F6;</button>
+      </div>
       <canvas #dayCanvas height="160"></canvas>
     </div>
   </div>
@@ -142,6 +145,16 @@
       </tr>
     </tbody>
   </table>
+</div>
+
+<div class="modal-overlay" *ngIf="modalDay" (click)="closeModal()">
+  <div class="modal-dialog" (click)="$event.stopPropagation()">
+    <div class="modal-header">
+      <h3>{{ modalDay.date }} (total: {{ (modalDay.controller_output_power_w_total / 1000).toFixed(3) }} kWh)</h3>
+      <button type="button" class="btn-modal-close" (click)="closeModal()" title="Close">&times;</button>
+    </div>
+    <canvas #modalCanvas></canvas>
+  </div>
 </div>
 
 <div class="card" *ngIf="payload?.strategy_recommendation as rec">

@@ -43,6 +43,9 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
   @ViewChild('summaryCanvas')
   summaryCanvas?: ElementRef<HTMLCanvasElement>;
 
+  @ViewChild('modalCanvas')
+  modalCanvas?: ElementRef<HTMLCanvasElement>;
+
   @ViewChildren('dayCanvas')
   dayCanvases?: QueryList<ElementRef<HTMLCanvasElement>>;
 
@@ -65,8 +68,12 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
   todayGeneratedKwh = 0;
   todayProgressPercent = 0;
 
+  modalDay: DayForecast | null = null;
+
   private summaryChart: Chart | null = null;
   private dayCharts: Chart[] = [];
+  private modalChart: Chart | null = null;
+  private sharedYAxisMax = 100;
   private viewReady = false;
   private progressTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -207,6 +214,20 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
 
   trackComparison(_: number, comparison: StrategyComparison): string {
     return comparison.strategy;
+  }
+
+  openModal(day: DayForecast): void {
+    this.modalDay = day;
+    this.cdr.detectChanges();
+    setTimeout(() => this.renderModalChart(), 0);
+  }
+
+  closeModal(): void {
+    if (this.modalChart) {
+      this.modalChart.destroy();
+      this.modalChart = null;
+    }
+    this.modalDay = null;
   }
 
   formatNetPence(value: number): string {
@@ -407,6 +428,56 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
     });
   }
 
+  private renderModalChart(): void {
+    if (!this.modalDay || !this.modalCanvas) {
+      return;
+    }
+    if (this.modalChart) {
+      this.modalChart.destroy();
+    }
+    const day = this.modalDay;
+    this.modalChart = new Chart(this.modalCanvas.nativeElement.getContext('2d')!, {
+      type: 'line',
+      data: {
+        labels: day.times,
+        datasets: [
+          {
+            label: 'Controller output (W)',
+            data: day.controller_output_power_w,
+            borderColor: '#facc15',
+            backgroundColor: 'rgba(250,204,21,0.2)',
+            tension: 0.25,
+            pointRadius: 2,
+            yAxisID: 'yPower',
+          },
+          {
+            label: 'Cloud cover (%)',
+            data: day.cloud_cover_percent,
+            borderColor: '#9ca3af',
+            backgroundColor: 'rgba(156,163,175,0.2)',
+            tension: 0.25,
+            pointRadius: 2,
+            yAxisID: 'yCloud',
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        interaction: { mode: 'index', intersect: false },
+        scales: {
+          yPower: { beginAtZero: true, max: this.sharedYAxisMax, position: 'left' },
+          yCloud: {
+            beginAtZero: true,
+            min: 0,
+            max: 100,
+            position: 'right',
+            grid: { drawOnChartArea: false },
+          },
+        },
+      },
+    });
+  }
+
   private renderDayCharts(): void {
     if (!this.payload || !this.dayCanvases) {
       return;
@@ -420,6 +491,7 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
       0,
     );
     const sharedYAxisMax = Math.max(100, Math.ceil(globalMaxW / 100) * 100);
+    this.sharedYAxisMax = sharedYAxisMax;
 
     const canvases = this.dayCanvases.toArray();
     days.forEach((day, index) => {
@@ -455,6 +527,7 @@ export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
         },
         options: {
           responsive: true,
+          interaction: { mode: 'index', intersect: false },
           scales: {
             yPower: { beginAtZero: true, max: sharedYAxisMax, position: 'left' },
             yCloud: {
