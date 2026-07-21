@@ -12,6 +12,7 @@ import {
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Chart } from 'chart.js/auto';
+import type { Plugin } from 'chart.js';
 import {
   BatteryPlanRow,
   DayForecast,
@@ -28,6 +29,66 @@ interface CachedForecastPayload {
   payload: ForecastPayload;
 }
 
+// Given a day's hourly "HH:MM" labels, returns the fractional label index that
+// corresponds to the current time so it can be mapped to an x pixel position.
+// Returns null if the current time falls before the first label.
+function computeNowIndex(times: string[]): number | null {
+  if (times.length === 0) {
+    return null;
+  }
+
+  const now = new Date();
+  const currentHourFloat = now.getHours() + now.getMinutes() / 60 + now.getSeconds() / 3600;
+  const hours = times.map((time) => Number.parseInt(time.split(':', 1)[0], 10));
+
+  if (currentHourFloat < hours[0]) {
+    return null;
+  }
+
+  for (let i = 0; i < hours.length - 1; i += 1) {
+    if (currentHourFloat >= hours[i] && currentHourFloat <= hours[i + 1]) {
+      const span = hours[i + 1] - hours[i];
+      return span > 0 ? i + (currentHourFloat - hours[i]) / span : i;
+    }
+  }
+
+  return hours.length - 1;
+}
+
+// Draws a red dashed vertical line at the current time of day. Only attached
+// to charts for today's date (see isToday()).
+const nowLinePlugin: Plugin<'line'> = {
+  id: 'nowLine',
+  afterDatasetsDraw(chart) {
+    const labels = chart.data.labels as string[] | undefined;
+    if (!labels || labels.length === 0) {
+      return;
+    }
+    const index = computeNowIndex(labels);
+    if (index === null) {
+      return;
+    }
+    const xScale = chart.scales['x'];
+    if (!xScale) {
+      return;
+    }
+
+    const x = xScale.getPixelForValue(index);
+    const { top, bottom } = chart.chartArea;
+    const ctx = chart.ctx;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.setLineDash([6, 4]);
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = '#ef4444';
+    ctx.moveTo(x, top);
+    ctx.lineTo(x, bottom);
+    ctx.stroke();
+    ctx.restore();
+  },
+};
+
 @Component({
   selector: 'app-home',
   imports: [CommonModule, FormsModule],
@@ -39,6 +100,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
   private readonly payloadCacheKey = 'solar_forecast_dashboard_payload_v1';
   private readonly payloadCacheTtlMs = 10 * 60 * 1000;
   private readonly progressTickMs = 5 * 60 * 1000;
+  private readonly nowLineTickMs = 60 * 1000;
 
   @ViewChild('summaryCanvas')
   summaryCanvas?: ElementRef<HTMLCanvasElement>;
@@ -76,6 +138,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
   private sharedYAxisMax = 100;
   private viewReady = false;
   private progressTimer: ReturnType<typeof setInterval> | null = null;
+  private nowLineTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private readonly forecastService: ForecastService,
@@ -101,12 +164,24 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
       this.updateTodayProgress();
       this.cdr.detectChanges();
     }, this.progressTickMs);
+
+    // Keep the "now" line on today's chart(s) creeping forward while the tab stays open.
+    this.nowLineTimer = setInterval(() => {
+      this.dayCharts.forEach((chart) => chart.update('none'));
+      if (this.modalChart) {
+        this.modalChart.update('none');
+      }
+    }, this.nowLineTickMs);
   }
 
   ngOnDestroy(): void {
     if (this.progressTimer !== null) {
       clearInterval(this.progressTimer);
       this.progressTimer = null;
+    }
+    if (this.nowLineTimer !== null) {
+      clearInterval(this.nowLineTimer);
+      this.nowLineTimer = null;
     }
   }
 
@@ -384,9 +459,13 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     if (!this.payload || this.payload.days.length === 0) {
       return null;
     }
+    return this.payload.days.find((day) => this.isToday(day.date)) ?? this.payload.days[0];
+  }
+
+  private isToday(dateStr: string): boolean {
     const now = new Date();
     const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-    return this.payload.days.find((day) => day.date === todayKey) ?? this.payload.days[0];
+    return dateStr === todayKey;
   }
 
   private renderSummaryChart(): void {
@@ -431,6 +510,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
     const day = this.modalDay;
     this.modalChart = new Chart(this.modalCanvas.nativeElement.getContext('2d')!, {
       type: 'line',
+      plugins: this.isToday(day.date) ? [nowLinePlugin] : [],
       data: {
         labels: day.times,
         datasets: [
@@ -495,6 +575,7 @@ export class HomeComponent implements OnInit, AfterViewInit, OnDestroy {
 
       const chart = new Chart(canvas.getContext('2d')!, {
         type: 'line',
+        plugins: this.isToday(day.date) ? [nowLinePlugin] : [],
         data: {
           labels: day.times,
           datasets: [
